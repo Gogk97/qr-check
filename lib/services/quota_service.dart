@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/qris_payment_screen.dart';
 import '../theme/app_theme.dart';
 import 'auth_service.dart';
+import 'device_service.dart';
 import 'monetization_service.dart';
 import 'supabase_service.dart';
 
@@ -14,7 +15,7 @@ class QuotaService {
   static const String _quotaKey = 'user_delete_quota_v1';
   static const String _initializedUsersKey = 'initialized_quota_users_v1';
 
-  /// Inisialisasi kuota saat login akun (sinkronisasi dari server Supabase)
+  /// Inisialisasi kuota saat login akun (sinkronisasi dari server Supabase dengan perlindungan anti-exploit)
   static Future<int> initQuotaForLogin({
     required bool isGoogle,
     required String userId,
@@ -23,30 +24,37 @@ class QuotaService {
     await prefs.setString('last_active_user_id_v1', userId);
     final userQuotaKey = 'user_quota_v1_$userId';
 
-    // 1. Coba ambil data resmi dari Supabase profiles
+    // 1. Klaim kuota selamat datang terikat device (Anti Multi-Account / Reinstall Abuse)
     try {
       if (SupabaseService.isAuthenticated) {
-        final profile = await SupabaseService.client
-            .from('profiles')
-            .select('remaining_quota, is_pro')
-            .eq('id', userId)
-            .maybeSingle();
+        final deviceDetails = await DeviceService.getDeviceDetails();
+        final deviceId = deviceDetails['device_id'] ?? userId;
 
-        if (profile != null) {
-          final serverQuota = profile['remaining_quota'] as int?;
-          final serverIsPro = profile['is_pro'] as bool? ?? false;
+        final res = await SupabaseService.client.rpc('claim_device_welcome_quota', params: {
+          'p_device_id': deviceId,
+          'p_device_brand': deviceDetails['device_brand'],
+          'p_device_model': deviceDetails['device_model'],
+          'p_os_version': deviceDetails['os_version'],
+        });
+
+        if (res is Map && res['success'] == true) {
+          final serverQuota = (res['remaining_quota'] as num?)?.toInt();
+          final serverIsPro = res['is_pro'] as bool? ?? false;
           if (serverIsPro) {
             await MonetizationService.setProUser(true, userId: userId);
           }
           if (serverQuota != null) {
             await prefs.setInt(_quotaKey, serverQuota);
             await prefs.setInt(userQuotaKey, serverQuota);
+            if (res['bonus_granted'] == false && res['message'] != null) {
+              debugPrint('⚠️ Anti-Abuse notice: ${res['message']}');
+            }
             return serverQuota;
           }
         }
       }
     } catch (e) {
-      debugPrint('⚠️ Supabase sync profile quota error: $e');
+      debugPrint('⚠️ Supabase claim_device_welcome_quota error: $e');
     }
 
     final initializedList = prefs.getStringList(_initializedUsersKey) ?? [];

@@ -63,6 +63,23 @@ CREATE TABLE IF NOT EXISTS public.ad_reward_events (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============================================================================
+-- ANTI-EXPLOIT / MULTI-ACCOUNT TAMPER PROTECTION (Device-Bound Quota & Guest)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.device_allowances (
+  device_id         TEXT PRIMARY KEY,
+  first_user_id     UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  first_auth_type   TEXT NOT NULL DEFAULT 'google', -- 'google' atau 'guest'
+  bonus_claimed     BOOLEAN NOT NULL DEFAULT true,
+  claimed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  device_brand      TEXT,
+  device_model      TEXT,
+  os_version        TEXT
+);
+ALTER TABLE public.device_allowances ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.device_allowances FROM anon, authenticated;
+
 CREATE TABLE IF NOT EXISTS public.payments (
   id          TEXT PRIMARY KEY DEFAULT ('PAY-' || replace(gen_random_uuid()::text, '-', '')),
   user_id     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -423,6 +440,149 @@ BEGIN
 END;
 $$;
 GRANT EXECUTE ON FUNCTION public.update_device_info TO authenticated;
+
+-- 8c. CLAIM DEVICE WELCOME QUOTA (ANTI-EXPLOIT) ------------------------------
+CREATE OR REPLACE FUNCTION public.claim_device_welcome_quota(
+  p_device_id       TEXT,
+  p_device_brand    TEXT DEFAULT NULL,
+  p_device_model    TEXT DEFAULT NULL,
+  p_os_version      TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_uid            UUID := auth.uid();
+  v_profile        public.profiles%ROWTYPE;
+  v_existing_allow public.device_allowances%ROWTYPE;
+  v_initial_quota  INT := 0;
+  v_bonus_granted  BOOLEAN := false;
+  v_is_first_claim BOOLEAN := false;
+  v_reason_note    TEXT := NULL;
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN json_build_object('success', false, 'error', 'UNAUTHENTICATED');
+  END IF;
+
+  IF p_device_id IS NULL OR length(trim(p_device_id)) = 0 THEN
+    RETURN json_build_object('success', false, 'error', 'INVALID_DEVICE_ID');
+  END IF;
+
+  SELECT * INTO v_profile FROM public.profiles WHERE id = v_uid;
+  IF NOT FOUND THEN
+    RETURN json_build_object('success', false, 'error', 'PROFILE_NOT_FOUND');
+  END IF;
+
+  -- Cek status hardware di device_allowances
+  SELECT * INTO v_existing_allow FROM public.device_allowances WHERE device_id = p_device_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    -- PERANGKAT BARU (Belum pernah klaim bonus di HP ini)
+    v_is_first_claim := true;
+    v_bonus_granted := true;
+    v_initial_quota := CASE WHEN v_profile.is_guest THEN 5 ELSE 10 END;
+
+    INSERT INTO public.device_allowances (
+      device_id, first_user_id, first_auth_type, bonus_claimed,
+      claimed_at, last_seen_at, device_brand, device_model, os_version
+    ) VALUES (
+      p_device_id, v_uid, CASE WHEN v_profile.is_guest THEN 'guest' ELSE 'google' END,
+      true, now(), now(), p_device_brand, p_device_model, p_os_version
+    );
+
+    UPDATE public.profiles
+    SET remaining_quota = v_initial_quota,
+        device_id = p_device_id,
+        device_brand = COALESCE(p_device_brand, device_brand),
+        device_model = COALESCE(p_device_model, device_model),
+        os_version = COALESCE(p_os_version, os_version),
+        updated_at = now()
+    WHERE id = v_uid;
+
+    IF NOT EXISTS (SELECT 1 FROM public.quota_ledger WHERE user_id = v_uid) THEN
+      INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+      VALUES (v_uid, v_initial_quota, 'INITIAL', v_initial_quota, 'welcome_' || p_device_id);
+    END IF;
+
+  ELSE
+    -- PERANGKAT SUDAH TERDAFTAR SEBELUMNYA
+    UPDATE public.device_allowances
+    SET last_seen_at = now(),
+        device_brand = COALESCE(p_device_brand, device_brand),
+        device_model = COALESCE(p_device_model, device_model),
+        os_version = COALESCE(p_os_version, os_version)
+    WHERE device_id = p_device_id;
+
+    -- Skenario A: Pemilik asli perangkat login kembali (same user)
+    IF v_existing_allow.first_user_id = v_uid THEN
+      v_initial_quota := v_profile.remaining_quota;
+      v_bonus_granted := true;
+
+    -- Skenario B: Sebelumnya guest, sekarang upgrade login pertama kali ke Google di device yang sama
+    ELSIF v_existing_allow.first_auth_type = 'guest' AND NOT v_profile.is_guest THEN
+      IF NOT EXISTS (SELECT 1 FROM public.quota_ledger WHERE user_id = v_uid) THEN
+        v_initial_quota := 10;
+        v_bonus_granted := true;
+
+        UPDATE public.device_allowances
+        SET first_user_id = v_uid,
+            first_auth_type = 'google',
+            last_seen_at = now()
+        WHERE device_id = p_device_id;
+
+        UPDATE public.profiles
+        SET remaining_quota = 10,
+            device_id = p_device_id,
+            device_brand = COALESCE(p_device_brand, device_brand),
+            device_model = COALESCE(p_device_model, device_model),
+            os_version = COALESCE(p_os_version, os_version),
+            updated_at = now()
+        WHERE id = v_uid;
+
+        INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+        VALUES (v_uid, 10, 'INITIAL', 10, 'welcome_google_upgrade_' || p_device_id);
+      ELSE
+        v_initial_quota := v_profile.remaining_quota;
+      END IF;
+
+    -- Skenario C: Multi-Account Farming / Reinstall Abuse
+    ELSE
+      IF NOT EXISTS (SELECT 1 FROM public.quota_ledger WHERE user_id = v_uid) THEN
+        UPDATE public.profiles
+        SET remaining_quota = 0,
+            device_id = p_device_id,
+            device_brand = COALESCE(p_device_brand, device_brand),
+            device_model = COALESCE(p_device_model, device_model),
+            os_version = COALESCE(p_os_version, os_version),
+            updated_at = now()
+        WHERE id = v_uid;
+
+        INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+        VALUES (v_uid, 0, 'INITIAL', 0, 'multi_account_blocked_' || p_device_id);
+
+        v_initial_quota := 0;
+        v_bonus_granted := false;
+        v_reason_note := 'Perangkat ini sudah pernah mengklaim kuota bonus selamat datang. Tonton iklan atau beli PRO untuk menambah kuota.';
+      ELSE
+        v_initial_quota := v_profile.remaining_quota;
+        v_bonus_granted := false;
+      END IF;
+    END IF;
+  END IF;
+
+  RETURN json_build_object(
+    'success', true,
+    'bonus_granted', v_bonus_granted,
+    'is_first_device_claim', v_is_first_claim,
+    'remaining_quota', v_initial_quota,
+    'is_pro', v_profile.is_pro,
+    'message', v_reason_note
+  );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.claim_device_welcome_quota(TEXT, TEXT, TEXT, TEXT) TO authenticated;
 
 -- 9. STORAGE: bucket privat bukti bayar -------------------------------------
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
