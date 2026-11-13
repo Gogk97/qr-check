@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../constants/supabase_config.dart';
 import '../models/user_model.dart';
 import 'monetization_service.dart';
 import 'quota_service.dart';
@@ -13,6 +14,7 @@ class AuthService {
   static const String _isLoggedInKey = 'is_logged_in_v1';
 
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
+    serverClientId: SupabaseConfig.googleWebClientId,
     scopes: ['email', 'profile'],
   );
 
