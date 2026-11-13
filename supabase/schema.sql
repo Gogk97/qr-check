@@ -178,10 +178,35 @@ BEGIN
     CASE WHEN v_is_guest THEN 'Pengguna Tamu' ELSE 'Pengguna Google' END
   );
 
-  INSERT INTO public.profiles (id, display_name, email, avatar_url, is_guest, remaining_quota)
-  VALUES (new.id, v_name, COALESCE(new.email, ''), new.raw_user_meta_data ->> 'avatar_url',
-          v_is_guest, v_quota)
-  ON CONFLICT (id) DO NOTHING;
+  INSERT INTO public.profiles (
+    id, display_name, email, avatar_url, is_guest, remaining_quota,
+    device_id, device_brand, device_model, os_version, device_platform, device_summary,
+    last_sign_in_at
+  )
+  VALUES (
+    new.id,
+    v_name,
+    COALESCE(new.email, ''),
+    new.raw_user_meta_data ->> 'avatar_url',
+    v_is_guest,
+    v_quota,
+    new.raw_user_meta_data ->> 'device_id',
+    new.raw_user_meta_data ->> 'device_brand',
+    new.raw_user_meta_data ->> 'device_model',
+    new.raw_user_meta_data ->> 'os_version',
+    new.raw_user_meta_data ->> 'device_platform',
+    new.raw_user_meta_data ->> 'device_summary',
+    now()
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    device_id = COALESCE(EXCLUDED.device_id, public.profiles.device_id),
+    device_brand = COALESCE(EXCLUDED.device_brand, public.profiles.device_brand),
+    device_model = COALESCE(EXCLUDED.device_model, public.profiles.device_model),
+    os_version = COALESCE(EXCLUDED.os_version, public.profiles.os_version),
+    device_platform = COALESCE(EXCLUDED.device_platform, public.profiles.device_platform),
+    device_summary = COALESCE(EXCLUDED.device_summary, public.profiles.device_summary),
+    last_sign_in_at = now(),
+    updated_at = now();
 
   INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
   VALUES (new.id, v_quota, 'INITIAL', v_quota, 'signup');
