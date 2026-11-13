@@ -1,0 +1,397 @@
+-- ============================================================================
+-- QR-CHECK • SUPABASE SCHEMA v2 (hardened)
+-- Postgres + Supabase Auth (Google & Anonymous) + Storage + RLS
+--
+-- Prinsip keamanan:
+--   * Client TIDAK PERNAH menulis langsung ke kuota / is_pro / status pembayaran.
+--   * Semua mutasi sensitif lewat fungsi SECURITY DEFINER yang divalidasi.
+--   * Fungsi admin hanya untuk JWT dengan app_metadata.role = 'admin'
+--     (app_metadata hanya bisa diubah server-side / service_role).
+--   * Reward iklan hanya bisa diberikan oleh service_role (Edge Function SSV).
+--   * Ledger kuota bersifat append-only.
+-- Script ini idempotent (aman dijalankan ulang).
+-- ============================================================================
+
+-- 1. ENUMS ------------------------------------------------------------------
+DO $$ BEGIN
+  CREATE TYPE public.payment_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE public.quota_reason AS ENUM ('INITIAL', 'DELETE_PHOTO', 'AD_REWARD', 'ADMIN_ADJUST');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- 2. TABLES -----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id               UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  display_name     TEXT NOT NULL DEFAULT 'User',
+  email            TEXT NOT NULL DEFAULT '',
+  avatar_url       TEXT,
+  is_guest         BOOLEAN NOT NULL DEFAULT false,
+  is_pro           BOOLEAN NOT NULL DEFAULT false,
+  pro_activated_at TIMESTAMPTZ,
+  remaining_quota  INT NOT NULL DEFAULT 5 CHECK (remaining_quota >= 0),
+  device_platform  TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.quota_ledger (
+  id            BIGSERIAL PRIMARY KEY,
+  user_id       UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  delta         INT NOT NULL,
+  reason        public.quota_reason NOT NULL,
+  balance_after INT NOT NULL,
+  ref_id        TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_quota_ledger_user ON public.quota_ledger(user_id, created_at DESC);
+-- Idempotency: satu ref_id hanya boleh memotong kuota sekali per user
+CREATE UNIQUE INDEX IF NOT EXISTS uq_quota_ledger_delete_ref
+  ON public.quota_ledger(user_id, ref_id)
+  WHERE reason = 'DELETE_PHOTO' AND ref_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS public.ad_reward_events (
+  transaction_id TEXT PRIMARY KEY,           -- dari AdMob SSV (anti replay)
+  user_id        UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.payments (
+  id          TEXT PRIMARY KEY DEFAULT ('PAY-' || replace(gen_random_uuid()::text, '-', '')),
+  user_id     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  user_name   TEXT NOT NULL,
+  user_email  TEXT NOT NULL DEFAULT '',
+  sender_bank TEXT NOT NULL DEFAULT 'QRIS',
+  amount      INT  NOT NULL CHECK (amount > 0),
+  proof_path  TEXT,
+  status      public.payment_status NOT NULL DEFAULT 'PENDING',
+  notes       TEXT,
+  reviewed_by UUID REFERENCES auth.users(id),
+  reviewed_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_payments_user   ON public.payments(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON public.payments(status, created_at DESC);
+-- Maksimal 1 pembayaran PENDING per user (anti spam)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_one_pending
+  ON public.payments(user_id) WHERE status = 'PENDING';
+
+-- 3. HELPERS ----------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS boolean
+LANGUAGE sql STABLE
+AS $$
+  SELECT COALESCE(auth.jwt() -> 'app_metadata' ->> 'role', '') = 'admin';
+$$;
+
+-- Ledger append-only: tolak UPDATE/DELETE
+CREATE OR REPLACE FUNCTION public.block_ledger_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'quota_ledger is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_ledger_immutable ON public.quota_ledger;
+CREATE TRIGGER trg_ledger_immutable
+  BEFORE UPDATE OR DELETE ON public.quota_ledger
+  FOR EACH ROW EXECUTE FUNCTION public.block_ledger_mutation();
+
+-- 4. ROW LEVEL SECURITY -----------------------------------------------------
+ALTER TABLE public.profiles         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.quota_ledger     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ad_reward_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "profiles_select_own"  ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update_own"  ON public.profiles;
+DROP POLICY IF EXISTS "ledger_select_own"    ON public.quota_ledger;
+DROP POLICY IF EXISTS "payments_select_own"  ON public.payments;
+DROP POLICY IF EXISTS "payments_select_admin" ON public.payments;
+
+CREATE POLICY "profiles_select_own" ON public.profiles
+  FOR SELECT TO authenticated USING (id = auth.uid());
+CREATE POLICY "profiles_update_own" ON public.profiles
+  FOR UPDATE TO authenticated USING (id = auth.uid()) WITH CHECK (id = auth.uid());
+CREATE POLICY "ledger_select_own" ON public.quota_ledger
+  FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "payments_select_own" ON public.payments
+  FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "payments_select_admin" ON public.payments
+  FOR SELECT TO authenticated USING (public.is_admin());
+-- ad_reward_events: tanpa policy → hanya service_role yang bisa akses.
+
+-- Privilege hardening (defense in depth di atas RLS)
+REVOKE ALL ON public.profiles, public.quota_ledger, public.payments, public.ad_reward_events
+  FROM anon, authenticated;
+GRANT SELECT ON public.profiles, public.quota_ledger, public.payments TO authenticated;
+-- Client hanya boleh mengubah kolom non-sensitif pada profil:
+GRANT UPDATE (display_name, avatar_url, device_platform) ON public.profiles TO authenticated;
+
+-- 5. TRIGGER: PROFIL OTOMATIS SAAT SIGNUP -----------------------------------
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_is_guest boolean := COALESCE(new.is_anonymous, false);
+  v_quota    int     := CASE WHEN COALESCE(new.is_anonymous, false) THEN 5 ELSE 10 END;
+  v_name     text;
+BEGIN
+  v_name := COALESCE(
+    new.raw_user_meta_data ->> 'full_name',
+    new.raw_user_meta_data ->> 'name',
+    CASE WHEN v_is_guest THEN 'Pengguna Tamu' ELSE 'Pengguna Google' END
+  );
+
+  INSERT INTO public.profiles (id, display_name, email, avatar_url, is_guest, remaining_quota)
+  VALUES (new.id, v_name, COALESCE(new.email, ''), new.raw_user_meta_data ->> 'avatar_url',
+          v_is_guest, v_quota)
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+  VALUES (new.id, v_quota, 'INITIAL', v_quota, 'signup');
+
+  RETURN new;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- 6. RPC: KUOTA -------------------------------------------------------------
+-- Potong kuota atomik + idempotent (p_ref_id sama → tidak dipotong dua kali).
+CREATE OR REPLACE FUNCTION public.consume_quota(p_amount int, p_ref_id text DEFAULT NULL)
+RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_uid   uuid := auth.uid();
+  v_pro   boolean;
+  v_quota int;
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN json_build_object('success', false, 'code', 'UNAUTHORIZED');
+  END IF;
+  IF p_amount IS NULL OR p_amount <= 0 OR p_amount > 1000 THEN
+    RETURN json_build_object('success', false, 'code', 'INVALID_AMOUNT');
+  END IF;
+
+  SELECT is_pro, remaining_quota INTO v_pro, v_quota
+  FROM public.profiles WHERE id = v_uid FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN json_build_object('success', false, 'code', 'PROFILE_NOT_FOUND');
+  END IF;
+
+  IF v_pro THEN  -- PRO: unlimited, tidak ada pemotongan
+    RETURN json_build_object('success', true, 'is_pro', true,
+                             'remaining_quota', v_quota, 'consumed', 0);
+  END IF;
+
+  IF p_ref_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.quota_ledger
+    WHERE user_id = v_uid AND ref_id = p_ref_id AND reason = 'DELETE_PHOTO'
+  ) THEN  -- replay request yang sama
+    RETURN json_build_object('success', true, 'is_pro', false,
+                             'remaining_quota', v_quota, 'consumed', 0, 'replayed', true);
+  END IF;
+
+  IF v_quota < p_amount THEN
+    RETURN json_build_object('success', false, 'code', 'INSUFFICIENT_QUOTA',
+                             'remaining_quota', v_quota);
+  END IF;
+
+  v_quota := v_quota - p_amount;
+  UPDATE public.profiles SET remaining_quota = v_quota, updated_at = now() WHERE id = v_uid;
+  INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+  VALUES (v_uid, -p_amount, 'DELETE_PHOTO', v_quota, p_ref_id);
+
+  RETURN json_build_object('success', true, 'is_pro', false,
+                           'remaining_quota', v_quota, 'consumed', p_amount);
+END;
+$$;
+
+-- Reward iklan: HANYA service_role (Edge Function yang memverifikasi AdMob SSV).
+CREATE OR REPLACE FUNCTION public.grant_ad_reward(p_user_id uuid, p_transaction_id text)
+RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_quota int;
+BEGIN
+  IF p_transaction_id IS NULL OR length(p_transaction_id) = 0 THEN
+    RETURN json_build_object('success', false, 'code', 'INVALID_TRANSACTION');
+  END IF;
+
+  INSERT INTO public.ad_reward_events (transaction_id, user_id)
+  VALUES (p_transaction_id, p_user_id)
+  ON CONFLICT (transaction_id) DO NOTHING;
+  IF NOT FOUND THEN
+    RETURN json_build_object('success', false, 'code', 'DUPLICATE_TRANSACTION');
+  END IF;
+
+  UPDATE public.profiles
+  SET remaining_quota = remaining_quota + 1, updated_at = now()
+  WHERE id = p_user_id
+  RETURNING remaining_quota INTO v_quota;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'profile % not found', p_user_id;
+  END IF;
+
+  INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+  VALUES (p_user_id, 1, 'AD_REWARD', v_quota, p_transaction_id);
+
+  RETURN json_build_object('success', true, 'remaining_quota', v_quota);
+END;
+$$;
+
+-- 7. RPC: PEMBAYARAN --------------------------------------------------------
+-- Client tidak bisa INSERT langsung → status & nominal dipaksa server.
+CREATE OR REPLACE FUNCTION public.submit_payment(
+  p_sender_bank text,
+  p_proof_path  text,
+  p_notes       text DEFAULT NULL
+)
+RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  c_price constant int := 15000;
+  v_uid   uuid := auth.uid();
+  v_prof  public.profiles%ROWTYPE;
+  v_id    text;
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN json_build_object('success', false, 'code', 'UNAUTHORIZED');
+  END IF;
+
+  SELECT * INTO v_prof FROM public.profiles WHERE id = v_uid;
+  IF NOT FOUND THEN
+    RETURN json_build_object('success', false, 'code', 'PROFILE_NOT_FOUND');
+  END IF;
+  IF v_prof.is_pro THEN
+    RETURN json_build_object('success', false, 'code', 'ALREADY_PRO');
+  END IF;
+  IF p_proof_path IS NULL OR split_part(p_proof_path, '/', 1) <> v_uid::text THEN
+    RETURN json_build_object('success', false, 'code', 'INVALID_PROOF_PATH');
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.payments WHERE user_id = v_uid AND status = 'PENDING') THEN
+    RETURN json_build_object('success', false, 'code', 'PENDING_EXISTS');
+  END IF;
+
+  INSERT INTO public.payments (user_id, user_name, user_email, sender_bank, amount, proof_path, notes)
+  VALUES (v_uid, v_prof.display_name, v_prof.email,
+          left(COALESCE(NULLIF(trim(p_sender_bank), ''), 'QRIS'), 40),
+          c_price, p_proof_path, left(p_notes, 500))
+  RETURNING id INTO v_id;
+
+  RETURN json_build_object('success', true, 'payment_id', v_id, 'status', 'PENDING');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.approve_payment(p_payment_id text, p_notes text DEFAULT NULL)
+RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_user   uuid;
+  v_status public.payment_status;
+BEGIN
+  IF NOT public.is_admin() THEN
+    RETURN json_build_object('success', false, 'code', 'FORBIDDEN');
+  END IF;
+
+  SELECT user_id, status INTO v_user, v_status
+  FROM public.payments WHERE id = p_payment_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN json_build_object('success', false, 'code', 'NOT_FOUND');
+  END IF;
+  IF v_status <> 'PENDING' THEN
+    RETURN json_build_object('success', false, 'code', 'NOT_PENDING', 'status', v_status);
+  END IF;
+
+  UPDATE public.payments
+  SET status = 'APPROVED', notes = COALESCE(p_notes, notes),
+      reviewed_by = auth.uid(), reviewed_at = now(), updated_at = now()
+  WHERE id = p_payment_id;
+
+  UPDATE public.profiles
+  SET is_pro = true, pro_activated_at = now(), updated_at = now()
+  WHERE id = v_user;
+
+  RETURN json_build_object('success', true, 'payment_id', p_payment_id,
+                           'user_id', v_user, 'status', 'APPROVED');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.reject_payment(p_payment_id text, p_notes text DEFAULT 'Bukti transfer tidak valid')
+RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_status public.payment_status;
+BEGIN
+  IF NOT public.is_admin() THEN
+    RETURN json_build_object('success', false, 'code', 'FORBIDDEN');
+  END IF;
+
+  SELECT status INTO v_status FROM public.payments WHERE id = p_payment_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN json_build_object('success', false, 'code', 'NOT_FOUND');
+  END IF;
+  IF v_status <> 'PENDING' THEN
+    RETURN json_build_object('success', false, 'code', 'NOT_PENDING', 'status', v_status);
+  END IF;
+
+  UPDATE public.payments
+  SET status = 'REJECTED', notes = p_notes,
+      reviewed_by = auth.uid(), reviewed_at = now(), updated_at = now()
+  WHERE id = p_payment_id;
+
+  RETURN json_build_object('success', true, 'payment_id', p_payment_id, 'status', 'REJECTED');
+END;
+$$;
+
+-- 8. EXECUTE PRIVILEGES (default Postgres: PUBLIC boleh EXECUTE → dicabut) ---
+REVOKE EXECUTE ON FUNCTION
+  public.consume_quota(int, text),
+  public.grant_ad_reward(uuid, text),
+  public.submit_payment(text, text, text),
+  public.approve_payment(text, text),
+  public.reject_payment(text, text),
+  public.handle_new_user(),
+  public.block_ledger_mutation()
+FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.consume_quota(int, text)          TO authenticated;
+GRANT EXECUTE ON FUNCTION public.submit_payment(text, text, text)  TO authenticated;
+GRANT EXECUTE ON FUNCTION public.approve_payment(text, text)       TO authenticated;  -- dijaga is_admin()
+GRANT EXECUTE ON FUNCTION public.reject_payment(text, text)        TO authenticated;  -- dijaga is_admin()
+GRANT EXECUTE ON FUNCTION public.grant_ad_reward(uuid, text)       TO service_role;
+
+-- 9. STORAGE: bucket privat bukti bayar -------------------------------------
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('payment-proofs', 'payment-proofs', false, 5242880,
+        ARRAY['image/jpeg', 'image/png', 'image/webp'])
+ON CONFLICT (id) DO UPDATE
+  SET public = false,
+      file_size_limit = EXCLUDED.file_size_limit,
+      allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+DROP POLICY IF EXISTS "proofs_insert_own"  ON storage.objects;
+DROP POLICY IF EXISTS "proofs_select_own"  ON storage.objects;
+DROP POLICY IF EXISTS "proofs_select_admin" ON storage.objects;
+
+-- Upload hanya ke folder <uid>/...
+CREATE POLICY "proofs_insert_own" ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (bucket_id = 'payment-proofs' AND (storage.foldername(name))[1] = auth.uid()::text);
+CREATE POLICY "proofs_select_own" ON storage.objects
+  FOR SELECT TO authenticated
+  USING (bucket_id = 'payment-proofs' AND (storage.foldername(name))[1] = auth.uid()::text);
+CREATE POLICY "proofs_select_admin" ON storage.objects
+  FOR SELECT TO authenticated
+  USING (bucket_id = 'payment-proofs' AND public.is_admin());

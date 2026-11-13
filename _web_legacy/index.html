@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>QRIS & QR Smart Gallery Detector</title>
+  
+  <!-- Favicon & PWA Theme -->
+  <meta name="theme-color" content="#090d16">
+  <meta name="description" content="Deteksi dan saring foto galeri HP khusus QRIS dan QR Code secara cepat, privat, dan offline.">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            },
+            qris: {
+              red: '#e31b23',
+              green: '#10b981',
+            }
+          },
+          fontFamily: {
+            sans: ['Outfit', 'Inter', 'system-ui', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts: Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- QR Decoding Library (jsQR Fallback) -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+  <!-- JSZip & FileSaver for Batch ZIP Download -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: #0b0f19;
+      color: #f1f5f9;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .glass-panel {
+      background: rgba(17, 24, 39, 0.7);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glow-qris {
+      box-shadow: 0 0 35px -5px rgba(16, 185, 129, 0.25);
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white pb-16">
+
+  <!-- Header & Navbar -->
+  <header class="sticky top-0 z-40 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-xl">
+    <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="relative w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 via-indigo-500 to-rose-500 p-[2px] shadow-lg shadow-indigo-500/20">
+          <div class="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
+            <i data-lucide="scan-line" class="w-5 h-5 text-emerald-400"></i>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+              QRIS Filter Lens
+            </h1>
+            <span class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+              SMART AI
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Penyaring Foto Galeri Khusus QRIS & QR Code</p>
+        </div>
+      </div>
+
+      <!-- Privacy Badge -->
+      <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-400">
+        <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i>
+        <span>100% Privat di HP (Tanpa Server Luar)</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-6xl w-full mx-auto px-4 pt-6 space-y-6">
+
+    <!-- Hero / Upload Section -->
+    <section class="relative rounded-3xl overflow-hidden glass-panel p-6 sm:p-8 border border-slate-800/80 shadow-2xl">
+      <div class="absolute -top-24 -right-24 w-80 h-80 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="absolute -bottom-24 -left-24 w-80 h-80 bg-emerald-600/15 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div class="relative z-10 max-w-2xl mx-auto text-center space-y-4">
+        <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-xs font-medium text-indigo-300">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5 text-indigo-400"></i>
+          Pilah Ratusan Gambar Sekaligus Secara Otomatis
+        </div>
+
+        <h2 class="text-2xl sm:text-4xl font-extrabold tracking-tight text-white">
+          Pilih Foto dari Galeri HP Anda
+        </h2>
+        <p class="text-sm sm:text-base text-slate-400 max-w-lg mx-auto leading-relaxed">
+          Sistem akan memindai foto-foto yang Anda pilih dan hanya memisahkan gambar yang mengandung <span class="text-emerald-400 font-semibold">QRIS</span> atau <span class="text-amber-300 font-semibold">QR Code</span>.
+        </p>
+
+        <!-- Drop Zone & Mobile Trigger -->
+        <div id="dropZone" class="mt-6 border-2 border-dashed border-slate-700/80 hover:border-indigo-500/60 rounded-3xl p-6 sm:p-10 transition-all duration-300 bg-slate-900/40 cursor-pointer group">
+          <div class="flex flex-col items-center justify-center space-y-4">
+            <div class="w-16 h-16 rounded-2xl bg-indigo-600/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 group-hover:scale-110 group-hover:bg-indigo-600/20 transition-all duration-300">
+              <i data-lucide="images" class="w-8 h-8"></i>
+            </div>
+            
+            <div class="space-y-1">
+              <p class="text-base font-semibold text-white">
+                Sentuh untuk membuka galeri foto
+              </p>
+              <p class="text-xs text-slate-400 hidden sm:block">
+                atau drag and drop kumpulan file gambar ke sini
+              </p>
+            </div>
+
+            <!-- Big Action Buttons -->
+            <div class="pt-2 flex flex-wrap items-center justify-center gap-3 w-full sm:w-auto">
+              <!-- Gallery Multi File Input Trigger -->
+              <label for="fileInput" class="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-semibold text-sm shadow-xl shadow-indigo-600/25 flex items-center justify-center gap-2.5 cursor-pointer active:scale-95 transition-all">
+                <i data-lucide="image-plus" class="w-5 h-5"></i>
+                Buka Galeri Foto (Bisa Pilih Banyak)
+              </label>
+
+              <!-- Optional Direct Camera Trigger -->
+              <label for="cameraInput" class="w-full sm:w-auto px-5 py-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm border border-slate-700 flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all">
+                <i data-lucide="camera" class="w-4 h-4 text-emerald-400"></i>
+                Ambil Foto
+              </label>
+            </div>
+
+            <!-- Hidden Inputs -->
+            <input type="file" id="fileInput" multiple accept="image/*" class="hidden">
+            <input type="file" id="cameraInput" accept="image/*" capture="environment" class="hidden">
+          </div>
+        </div>
+
+        <!-- Privacy Assurance Sub-text -->
+        <p class="text-[11px] text-slate-500 flex items-center justify-center gap-1.5 pt-1">
+          <i data-lucide="lock" class="w-3.5 h-3.5 text-emerald-500"></i>
+          Foto Anda tidak pernah diupload ke server manapun. Pemrosesan dilakukan 100% lokal di memori HP.
+        </p>
+      </div>
+    </section>
+
+    <!-- Scanning Overlay / Progress Bar -->
+    <div id="scanningOverlay" class="hidden rounded-2xl glass-panel p-5 border border-indigo-500/30 animate-pulse">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2.5">
+          <div class="animate-spin text-indigo-400">
+            <i data-lucide="loader-2" class="w-5 h-5"></i>
+          </div>
+          <span id="progressText" class="text-sm font-semibold text-white">Memindai gambar...</span>
+        </div>
+        <span id="progressCount" class="text-xs text-indigo-300 font-mono">0 / 0</span>
+      </div>
+      <div class="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
+        <div id="progressBar" class="bg-gradient-to-r from-indigo-500 via-emerald-400 to-indigo-600 h-2.5 rounded-full transition-all duration-200" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- Filter Tabs & Stats Bar -->
+    <section class="space-y-4">
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <!-- Segmented Filter Buttons -->
+        <div class="flex items-center gap-1.5 p-1 rounded-2xl bg-slate-900/90 border border-slate-800 overflow-x-auto text-xs font-semibold">
+          <button type="button" data-filter="qris" class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 text-white shadow-md transition-all">
+            <i data-lucide="badge-check" class="w-4 h-4 text-emerald-300"></i>
+            <span>Hanya QRIS</span>
+            <span id="statQRIS" class="px-1.5 py-0.5 rounded-md text-[10px] bg-white/20 text-white">0</span>
+          </button>
+
+          <button type="button" data-filter="qr" class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800/80 text-slate-300 hover:bg-slate-700/80 transition-all">
+            <i data-lucide="qr-code" class="w-4 h-4 text-amber-400"></i>
+            <span>QR Biasa</span>
+            <span id="statQR" class="px-1.5 py-0.5 rounded-md text-[10px] bg-slate-700 text-slate-300">0</span>
+          </button>
+
+          <button type="button" data-filter="all" class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800/80 text-slate-300 hover:bg-slate-700/80 transition-all">
+            <i data-lucide="layers" class="w-4 h-4 text-indigo-400"></i>
+            <span>Semua Foto</span>
+            <span id="statAll" class="px-1.5 py-0.5 rounded-md text-[10px] bg-slate-700 text-slate-300">0</span>
+          </button>
+
+          <button type="button" data-filter="non-qr" class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800/80 text-slate-300 hover:bg-slate-700/80 transition-all">
+            <i data-lucide="image-off" class="w-4 h-4 text-slate-500"></i>
+            <span>Bukan QR</span>
+            <span id="statNonQR" class="px-1.5 py-0.5 rounded-md text-[10px] bg-slate-700 text-slate-300">0</span>
+          </button>
+        </div>
+
+        <!-- Batch Actions -->
+        <div class="flex items-center gap-2 justify-end">
+          <button type="button" id="btnSelectAll" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 flex items-center gap-1.5 transition-colors">
+            <i data-lucide="check-square" class="w-3.5 h-3.5"></i>
+            Pilih Semua
+          </button>
+          
+          <button type="button" id="btnDeselectAll" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 flex items-center gap-1.5 transition-colors">
+            <i data-lucide="square" class="w-3.5 h-3.5"></i>
+            Batal Pilih
+          </button>
+
+          <button type="button" id="btnDownloadZip" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all active:scale-95">
+            <i data-lucide="download" class="w-3.5 h-3.5"></i>
+            Download Terpilih (ZIP)
+          </button>
+
+          <button type="button" id="btnClearAll" class="p-2 rounded-xl bg-slate-800/80 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 text-xs border border-slate-700/80 transition-colors" title="Bersihkan Daftar">
+            <i data-lucide="trash-2" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Empty State -->
+    <div id="emptyState" class="py-16 text-center space-y-4 rounded-3xl glass-panel border border-slate-800/60 p-8">
+      <div class="w-16 h-16 mx-auto rounded-3xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-500">
+        <i data-lucide="folder-search" class="w-8 h-8"></i>
+      </div>
+      <div class="space-y-1">
+        <h3 class="text-base font-semibold text-slate-200">Belum ada foto yang dipilih</h3>
+        <p class="text-xs text-slate-500 max-w-sm mx-auto">
+          Klik tombol <strong>"Buka Galeri Foto"</strong> di atas untuk memilih foto-foto dari galeri handphone Anda.
+        </p>
+      </div>
+    </div>
+
+    <!-- Gallery Grid (1 col on mobile, 2 on tablet, 3 on laptop, 4 on desktop) -->
+    <div id="galleryGrid" class="hidden grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <!-- Diisi secara dinamis oleh JavaScript -->
+    </div>
+
+  </main>
+
+  <!-- Detail Information Modal -->
+  <div id="detailModal" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="relative w-full max-w-lg rounded-3xl glass-panel bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+      <!-- Modal Header -->
+      <div class="p-4 px-6 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i data-lucide="file-text" class="w-5 h-5 text-indigo-400"></i>
+          <h3 class="font-bold text-base text-white">Detail Analisis QR</h3>
+        </div>
+        <button type="button" id="modalClose" class="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Modal Body -->
+      <div id="modalContent" class="p-6 overflow-y-auto space-y-4">
+        <!-- Konten detail dinamis -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="src/qris-parser.js"></script>
+  <script src="src/detector.js"></script>
+  <script src="src/app.js"></script>
+</body>
+</html>
