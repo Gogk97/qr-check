@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   pro_activated_at TIMESTAMPTZ,
   remaining_quota  INT NOT NULL DEFAULT 5 CHECK (remaining_quota >= 0),
   device_platform  TEXT,
+  device_id        TEXT,
+  device_brand     TEXT,
+  device_model     TEXT,
+  os_version       TEXT,
+  device_summary   TEXT,
+  last_sign_in_at  TIMESTAMPTZ DEFAULT now(),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -127,7 +133,17 @@ REVOKE ALL ON public.profiles, public.quota_ledger, public.payments, public.ad_r
   FROM anon, authenticated;
 GRANT SELECT ON public.profiles, public.quota_ledger, public.payments TO authenticated;
 -- Client hanya boleh mengubah kolom non-sensitif pada profil:
-GRANT UPDATE (display_name, avatar_url, device_platform) ON public.profiles TO authenticated;
+GRANT UPDATE (
+  display_name,
+  avatar_url,
+  device_platform,
+  device_id,
+  device_brand,
+  device_model,
+  os_version,
+  device_summary,
+  last_sign_in_at
+) ON public.profiles TO authenticated;
 
 -- 5. TRIGGER: PROFIL OTOMATIS SAAT SIGNUP -----------------------------------
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -371,6 +387,42 @@ GRANT EXECUTE ON FUNCTION public.submit_payment(text, text, text)  TO authentica
 GRANT EXECUTE ON FUNCTION public.approve_payment(text, text)       TO authenticated;  -- dijaga is_admin()
 GRANT EXECUTE ON FUNCTION public.reject_payment(text, text)        TO authenticated;  -- dijaga is_admin()
 GRANT EXECUTE ON FUNCTION public.grant_ad_reward(uuid, text)       TO service_role;
+
+-- 8b. UPDATE DEVICE INFO HELPER ---------------------------------------------
+CREATE OR REPLACE FUNCTION public.update_device_info(
+  p_device_id text DEFAULT NULL,
+  p_device_brand text DEFAULT NULL,
+  p_device_model text DEFAULT NULL,
+  p_os_version text DEFAULT NULL,
+  p_device_platform text DEFAULT NULL,
+  p_device_summary text DEFAULT NULL
+)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN json_build_object('success', false, 'error', 'UNAUTHENTICATED');
+  END IF;
+
+  UPDATE public.profiles
+  SET
+    device_id = COALESCE(p_device_id, device_id),
+    device_brand = COALESCE(p_device_brand, device_brand),
+    device_model = COALESCE(p_device_model, device_model),
+    os_version = COALESCE(p_os_version, os_version),
+    device_platform = COALESCE(p_device_platform, device_platform),
+    device_summary = COALESCE(p_device_summary, device_summary),
+    last_sign_in_at = now(),
+    updated_at = now()
+  WHERE id = auth.uid();
+
+  RETURN json_build_object('success', true);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.update_device_info TO authenticated;
 
 -- 9. STORAGE: bucket privat bukti bayar -------------------------------------
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

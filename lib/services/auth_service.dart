@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../constants/supabase_config.dart';
 import '../models/user_model.dart';
+import 'device_service.dart';
 import 'monetization_service.dart';
 import 'quota_service.dart';
 import 'supabase_service.dart';
@@ -60,6 +61,7 @@ class AuthService {
       await _persistUser(user);
       await QuotaService.initQuotaForLogin(isGoogle: false, userId: user.id);
       await MonetizationService.isProUser(userId: user.id);
+      syncDeviceInfoToServer().ignore();
       return user;
     } catch (e) {
       debugPrint('⚠️ Supabase Anonymous login error, fallback local: $e');
@@ -110,6 +112,7 @@ class AuthService {
       await _persistUser(user);
       await QuotaService.initQuotaForLogin(isGoogle: true, userId: user.id);
       await MonetizationService.isProUser(userId: user.id);
+      syncDeviceInfoToServer().ignore();
       return user;
     } catch (e) {
       debugPrint('Google Sign-In Error: $e');
@@ -153,6 +156,25 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_userKey);
     await prefs.setBool(_isLoggedInKey, false);
+  }
+
+  /// Sinkronisasi informasi spesifikasi detail perangkat ke database Supabase profiles
+  static Future<void> syncDeviceInfoToServer() async {
+    try {
+      if (!SupabaseService.isAuthenticated) return;
+      final details = await DeviceService.getDeviceDetails();
+      await SupabaseService.client.rpc('update_device_info', params: {
+        'p_device_id': details['device_id'],
+        'p_device_brand': details['device_brand'],
+        'p_device_model': details['device_model'],
+        'p_os_version': details['os_version'],
+        'p_device_platform': details['device_platform'],
+        'p_device_summary': details['device_summary'],
+      });
+      debugPrint('📱 Device info synced to Supabase: ${details['device_summary']}');
+    } catch (e) {
+      debugPrint('⚠️ Failed to sync device info: $e');
+    }
   }
 
   /// Menyimpan data pengguna ke SharedPreferences

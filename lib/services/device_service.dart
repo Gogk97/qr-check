@@ -106,4 +106,55 @@ class DeviceService {
     _cachedDeviceSummary = fallback;
     return fallback;
   }
+
+  /// Mengambil informasi spesifikasi lengkap perangkat terstruktur
+  static Future<Map<String, String?>> getDeviceDetails() async {
+    String? platformName;
+    String? brand;
+    String? model;
+    String? osVersion;
+    final deviceId = await getDeviceId();
+    final summary = await getDeviceSummary();
+
+    try {
+      if (kIsWeb) {
+        final web = await _deviceInfo.webBrowserInfo;
+        platformName = 'web';
+        brand = web.browserName.name;
+        model = web.userAgent;
+        osVersion = web.platform;
+      } else if (Platform.isAndroid) {
+        final android = await _deviceInfo.androidInfo;
+        platformName = 'android';
+        brand = android.brand;
+        model = android.model;
+        osVersion = 'Android ${android.version.release} (SDK ${android.version.sdkInt})';
+      } else if (Platform.isIOS) {
+        final ios = await _deviceInfo.iosInfo;
+        platformName = 'ios';
+        brand = 'Apple';
+        model = ios.utsname.machine;
+        osVersion = 'iOS ${ios.systemVersion}';
+      } else if (Platform.isMacOS) {
+        final mac = await _deviceInfo.macOsInfo;
+        platformName = 'macos';
+        brand = 'Apple';
+        model = mac.model;
+        osVersion = 'macOS ${mac.osRelease}';
+      } else {
+        platformName = Platform.operatingSystem;
+      }
+    } catch (e) {
+      debugPrint('Error getting device details: $e');
+    }
+
+    return {
+      'device_id': deviceId,
+      'device_brand': brand,
+      'device_model': model,
+      'os_version': osVersion,
+      'device_platform': platformName,
+      'device_summary': summary,
+    };
+  }
 }

@@ -68,6 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (user != null) {
         await QuotaService.getRemainingQuota();
         await MonetizationService.isProUser();
+        AuthService.syncDeviceInfoToServer().ignore();
       }
     } catch (e) {
       debugPrint('Profile sync on startup skipped: $e');
