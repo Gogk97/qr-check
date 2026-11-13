@@ -486,6 +486,9 @@ DECLARE
   v_bonus_granted  BOOLEAN := false;
   v_is_first_claim BOOLEAN := false;
   v_reason_note    TEXT := NULL;
+  v_earned_quota   INT := 0;
+  v_consumed_quota INT := 0;
+  v_legit_quota    INT := 0;
 BEGIN
   IF v_uid IS NULL THEN
     RETURN json_build_object('success', false, 'error', 'UNAUTHENTICATED');
@@ -574,25 +577,34 @@ BEGIN
 
     -- Skenario C: Multi-Account Farming / Reinstall Abuse
     ELSE
-      IF NOT EXISTS (SELECT 1 FROM public.quota_ledger WHERE user_id = v_uid) THEN
-        UPDATE public.profiles
-        SET remaining_quota = 0,
-            device_id = p_device_id,
-            device_brand = COALESCE(p_device_brand, device_brand),
-            device_model = COALESCE(p_device_model, device_model),
-            os_version = COALESCE(p_os_version, os_version),
-            updated_at = now()
-        WHERE id = v_uid;
+      -- Hitung hanya kuota sah (dari nonton iklan reward atau admin adjust)
+      SELECT COALESCE(SUM(delta), 0) INTO v_earned_quota
+      FROM public.quota_ledger
+      WHERE user_id = v_uid AND reason IN ('AD_REWARD', 'ADMIN_ADJUST');
 
+      SELECT COALESCE(SUM(ABS(delta)), 0) INTO v_consumed_quota
+      FROM public.quota_ledger
+      WHERE user_id = v_uid AND reason = 'DELETE_PHOTO';
+
+      v_legit_quota := GREATEST(0, v_earned_quota - v_consumed_quota);
+
+      -- Kunci sisa kuota ke nilai yang sah (0 jika belum nonton iklan/admin adjust)
+      UPDATE public.profiles
+      SET remaining_quota = v_legit_quota,
+          device_id = p_device_id,
+          device_brand = COALESCE(p_device_brand, device_brand),
+          device_model = COALESCE(p_device_model, device_model),
+          os_version = COALESCE(p_os_version, os_version),
+          updated_at = now()
+      WHERE id = v_uid;
+
+      v_initial_quota := v_legit_quota;
+      v_bonus_granted := false;
+      v_reason_note := 'Perangkat ini sudah pernah mengklaim kuota bonus selamat datang. Kuota gratis tidak diberikan lagi pada akun baru di perangkat ini.';
+
+      IF NOT EXISTS (SELECT 1 FROM public.quota_ledger WHERE user_id = v_uid AND ref_id LIKE 'multi_account_blocked%') THEN
         INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
-        VALUES (v_uid, 0, 'INITIAL', 0, 'multi_account_blocked_' || p_device_id);
-
-        v_initial_quota := 0;
-        v_bonus_granted := false;
-        v_reason_note := 'Perangkat ini sudah pernah mengklaim kuota bonus selamat datang. Tonton iklan atau beli PRO untuk menambah kuota.';
-      ELSE
-        v_initial_quota := v_profile.remaining_quota;
-        v_bonus_granted := false;
+        VALUES (v_uid, 0, 'INITIAL', v_legit_quota, 'multi_account_blocked_' || p_device_id || '_' || extract(epoch from now())::text);
       END IF;
     END IF;
   END IF;
