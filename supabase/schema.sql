@@ -169,14 +169,24 @@ RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  v_is_guest boolean := COALESCE(new.is_anonymous, false);
-  v_quota    int     := CASE WHEN COALESCE(new.is_anonymous, false) THEN 5 ELSE 10 END;
+  v_is_guest boolean;
   v_name     text;
+  v_avatar   text;
 BEGIN
+  v_is_guest := COALESCE(
+    (new.is_anonymous IS TRUE) OR ((new.raw_user_meta_data ->> 'is_guest') = 'true'),
+    false
+  );
+
   v_name := COALESCE(
-    new.raw_user_meta_data ->> 'full_name',
-    new.raw_user_meta_data ->> 'name',
-    CASE WHEN v_is_guest THEN 'Pengguna Tamu' ELSE 'Pengguna Google' END
+    NULLIF(trim(new.raw_user_meta_data ->> 'full_name'), ''),
+    NULLIF(trim(new.raw_user_meta_data ->> 'name'), ''),
+    CASE WHEN v_is_guest THEN 'Pengguna Tamu' ELSE 'Pengguna' END
+  );
+
+  v_avatar := COALESCE(
+    NULLIF(trim(new.raw_user_meta_data ->> 'avatar_url'), ''),
+    NULLIF(trim(new.raw_user_meta_data ->> 'picture'), '')
   );
 
   INSERT INTO public.profiles (
@@ -188,9 +198,9 @@ BEGIN
     new.id,
     v_name,
     COALESCE(new.email, ''),
-    new.raw_user_meta_data ->> 'avatar_url',
+    v_avatar,
     v_is_guest,
-    v_quota,
+    0, -- Kuota awal dikelola oleh RPC claim_device_welcome_quota (Shared Device Quota Pool)
     new.raw_user_meta_data ->> 'device_id',
     new.raw_user_meta_data ->> 'device_brand',
     new.raw_user_meta_data ->> 'device_model',
@@ -200,6 +210,9 @@ BEGIN
     now()
   )
   ON CONFLICT (id) DO UPDATE SET
+    display_name = COALESCE(EXCLUDED.display_name, public.profiles.display_name),
+    email = COALESCE(NULLIF(EXCLUDED.email, ''), public.profiles.email),
+    avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url),
     device_id = COALESCE(EXCLUDED.device_id, public.profiles.device_id),
     device_brand = COALESCE(EXCLUDED.device_brand, public.profiles.device_brand),
     device_model = COALESCE(EXCLUDED.device_model, public.profiles.device_model),
@@ -208,9 +221,6 @@ BEGIN
     device_summary = COALESCE(EXCLUDED.device_summary, public.profiles.device_summary),
     last_sign_in_at = now(),
     updated_at = now();
-
-  INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
-  VALUES (new.id, v_quota, 'INITIAL', v_quota, 'signup');
 
   RETURN new;
 END;
