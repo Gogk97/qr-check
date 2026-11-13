@@ -65,5 +65,6 @@ void main() {
   test('SupabaseConfig has valid project URL and anon key', () {
     expect(SupabaseConfig.projectUrl, contains('https://oljiqzttttxjrbwtfzze.supabase.co'));
     expect(SupabaseConfig.anonKey, isNotEmpty);
+    expect(SupabaseConfig.googleWebClientId, isNotEmpty);
   });
 }

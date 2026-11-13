@@ -3,7 +3,9 @@ import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../constants/supabase_config.dart';
 import '../models/user_model.dart';
+import 'device_service.dart';
 import 'monetization_service.dart';
 import 'quota_service.dart';
 import 'supabase_service.dart';
@@ -13,6 +15,7 @@ class AuthService {
   static const String _isLoggedInKey = 'is_logged_in_v1';
 
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
+    serverClientId: SupabaseConfig.googleWebClientId,
     scopes: ['email', 'profile'],
   );
 
@@ -41,8 +44,21 @@ class AuthService {
   /// Login sebagai pengguna tamu (Supabase Anonymous Sign-In)
   static Future<UserModel> loginAsGuest() async {
     try {
-      // 1. Supabase Anonymous Sign-In
-      final authRes = await SupabaseService.client.auth.signInAnonymously();
+      final deviceDetails = await DeviceService.getDeviceDetails();
+
+      // 1. Supabase Anonymous Sign-In dengan metadata device langsung
+      final authRes = await SupabaseService.client.auth.signInAnonymously(
+        data: {
+          'full_name': 'Pengguna Tamu',
+          'is_guest': true,
+          'device_id': deviceDetails['device_id'],
+          'device_brand': deviceDetails['device_brand'],
+          'device_model': deviceDetails['device_model'],
+          'os_version': deviceDetails['os_version'],
+          'device_platform': deviceDetails['device_platform'],
+          'device_summary': deviceDetails['device_summary'],
+        },
+      );
       final supaUser = authRes.user;
       final userId = supaUser?.id ?? 'guest_${DateTime.now().millisecondsSinceEpoch}';
 
@@ -58,6 +74,7 @@ class AuthService {
       await _persistUser(user);
       await QuotaService.initQuotaForLogin(isGoogle: false, userId: user.id);
       await MonetizationService.isProUser(userId: user.id);
+      await syncDeviceInfoToServer();
       return user;
     } catch (e) {
       debugPrint('⚠️ Supabase Anonymous login error, fallback local: $e');
@@ -108,6 +125,7 @@ class AuthService {
       await _persistUser(user);
       await QuotaService.initQuotaForLogin(isGoogle: true, userId: user.id);
       await MonetizationService.isProUser(userId: user.id);
+      await syncDeviceInfoToServer();
       return user;
     } catch (e) {
       debugPrint('Google Sign-In Error: $e');
@@ -151,6 +169,36 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_userKey);
     await prefs.setBool(_isLoggedInKey, false);
+  }
+
+  /// Sinkronisasi informasi spesifikasi detail perangkat ke database Supabase profiles
+  static Future<void> syncDeviceInfoToServer() async {
+    try {
+      if (!SupabaseService.isAuthenticated) return;
+      final details = await DeviceService.getDeviceDetails();
+
+      // 1. Simpan ke raw_user_meta_data di auth.users (tampil di dashboard auth)
+      try {
+        await SupabaseService.client.auth.updateUser(
+          UserAttributes(data: details),
+        );
+      } catch (e) {
+        debugPrint('⚠️ Auth metadata update notice: $e');
+      }
+
+      // 2. Simpan ke tabel profiles via RPC SECURITY DEFINER
+      await SupabaseService.client.rpc('update_device_info', params: {
+        'p_device_id': details['device_id'],
+        'p_device_brand': details['device_brand'],
+        'p_device_model': details['device_model'],
+        'p_os_version': details['os_version'],
+        'p_device_platform': details['device_platform'],
+        'p_device_summary': details['device_summary'],
+      });
+      debugPrint('📱 Device info synced to Supabase: ${details['device_summary']}');
+    } catch (e) {
+      debugPrint('⚠️ Failed to sync device info: $e');
+    }
   }
 
   /// Menyimpan data pengguna ke SharedPreferences

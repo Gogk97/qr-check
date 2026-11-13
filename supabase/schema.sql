@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   pro_activated_at TIMESTAMPTZ,
   remaining_quota  INT NOT NULL DEFAULT 5 CHECK (remaining_quota >= 0),
   device_platform  TEXT,
+  device_id        TEXT,
+  device_brand     TEXT,
+  device_model     TEXT,
+  os_version       TEXT,
+  device_summary   TEXT,
+  last_sign_in_at  TIMESTAMPTZ DEFAULT now(),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -56,6 +62,24 @@ CREATE TABLE IF NOT EXISTS public.ad_reward_events (
   user_id        UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ============================================================================
+-- ANTI-EXPLOIT / MULTI-ACCOUNT TAMPER PROTECTION (Device-Bound Quota & Guest)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.device_allowances (
+  device_id         TEXT PRIMARY KEY,
+  first_user_id     UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  first_auth_type   TEXT NOT NULL DEFAULT 'google', -- 'google' atau 'guest'
+  bonus_claimed     BOOLEAN NOT NULL DEFAULT true,
+  remaining_quota   INT NOT NULL DEFAULT 10 CHECK (remaining_quota >= 0),
+  claimed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  device_brand      TEXT,
+  device_model      TEXT,
+  os_version        TEXT
+);
+ALTER TABLE public.device_allowances ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.device_allowances FROM anon, authenticated;
 
 CREATE TABLE IF NOT EXISTS public.payments (
   id          TEXT PRIMARY KEY DEFAULT ('PAY-' || replace(gen_random_uuid()::text, '-', '')),
@@ -127,7 +151,17 @@ REVOKE ALL ON public.profiles, public.quota_ledger, public.payments, public.ad_r
   FROM anon, authenticated;
 GRANT SELECT ON public.profiles, public.quota_ledger, public.payments TO authenticated;
 -- Client hanya boleh mengubah kolom non-sensitif pada profil:
-GRANT UPDATE (display_name, avatar_url, device_platform) ON public.profiles TO authenticated;
+GRANT UPDATE (
+  display_name,
+  avatar_url,
+  device_platform,
+  device_id,
+  device_brand,
+  device_model,
+  os_version,
+  device_summary,
+  last_sign_in_at
+) ON public.profiles TO authenticated;
 
 -- 5. TRIGGER: PROFIL OTOMATIS SAAT SIGNUP -----------------------------------
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -135,23 +169,58 @@ RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  v_is_guest boolean := COALESCE(new.is_anonymous, false);
-  v_quota    int     := CASE WHEN COALESCE(new.is_anonymous, false) THEN 5 ELSE 10 END;
+  v_is_guest boolean;
   v_name     text;
+  v_avatar   text;
 BEGIN
-  v_name := COALESCE(
-    new.raw_user_meta_data ->> 'full_name',
-    new.raw_user_meta_data ->> 'name',
-    CASE WHEN v_is_guest THEN 'Pengguna Tamu' ELSE 'Pengguna Google' END
+  v_is_guest := COALESCE(
+    (new.is_anonymous IS TRUE) OR ((new.raw_user_meta_data ->> 'is_guest') = 'true'),
+    false
   );
 
-  INSERT INTO public.profiles (id, display_name, email, avatar_url, is_guest, remaining_quota)
-  VALUES (new.id, v_name, COALESCE(new.email, ''), new.raw_user_meta_data ->> 'avatar_url',
-          v_is_guest, v_quota)
-  ON CONFLICT (id) DO NOTHING;
+  v_name := COALESCE(
+    NULLIF(trim(new.raw_user_meta_data ->> 'full_name'), ''),
+    NULLIF(trim(new.raw_user_meta_data ->> 'name'), ''),
+    CASE WHEN v_is_guest THEN 'Pengguna Tamu' ELSE 'Pengguna' END
+  );
 
-  INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
-  VALUES (new.id, v_quota, 'INITIAL', v_quota, 'signup');
+  v_avatar := COALESCE(
+    NULLIF(trim(new.raw_user_meta_data ->> 'avatar_url'), ''),
+    NULLIF(trim(new.raw_user_meta_data ->> 'picture'), '')
+  );
+
+  INSERT INTO public.profiles (
+    id, display_name, email, avatar_url, is_guest, remaining_quota,
+    device_id, device_brand, device_model, os_version, device_platform, device_summary,
+    last_sign_in_at
+  )
+  VALUES (
+    new.id,
+    v_name,
+    COALESCE(new.email, ''),
+    v_avatar,
+    v_is_guest,
+    0, -- Kuota awal dikelola oleh RPC claim_device_welcome_quota (Shared Device Quota Pool)
+    new.raw_user_meta_data ->> 'device_id',
+    new.raw_user_meta_data ->> 'device_brand',
+    new.raw_user_meta_data ->> 'device_model',
+    new.raw_user_meta_data ->> 'os_version',
+    new.raw_user_meta_data ->> 'device_platform',
+    new.raw_user_meta_data ->> 'device_summary',
+    now()
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    display_name = COALESCE(EXCLUDED.display_name, public.profiles.display_name),
+    email = COALESCE(NULLIF(EXCLUDED.email, ''), public.profiles.email),
+    avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url),
+    device_id = COALESCE(EXCLUDED.device_id, public.profiles.device_id),
+    device_brand = COALESCE(EXCLUDED.device_brand, public.profiles.device_brand),
+    device_model = COALESCE(EXCLUDED.device_model, public.profiles.device_model),
+    os_version = COALESCE(EXCLUDED.os_version, public.profiles.os_version),
+    device_platform = COALESCE(EXCLUDED.device_platform, public.profiles.device_platform),
+    device_summary = COALESCE(EXCLUDED.device_summary, public.profiles.device_summary),
+    last_sign_in_at = now(),
+    updated_at = now();
 
   RETURN new;
 END;
@@ -169,9 +238,10 @@ RETURNS json
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  v_uid   uuid := auth.uid();
-  v_pro   boolean;
-  v_quota int;
+  v_uid       uuid := auth.uid();
+  v_pro       boolean;
+  v_quota     int;
+  v_device_id text;
 BEGIN
   IF v_uid IS NULL THEN
     RETURN json_build_object('success', false, 'code', 'UNAUTHORIZED');
@@ -206,6 +276,14 @@ BEGIN
 
   v_quota := v_quota - p_amount;
   UPDATE public.profiles SET remaining_quota = v_quota, updated_at = now() WHERE id = v_uid;
+
+  -- Sinkronkan pool perangkat jika akun terhubung ke device fisik
+  SELECT device_id INTO v_device_id FROM public.profiles WHERE id = v_uid;
+  IF v_device_id IS NOT NULL THEN
+    UPDATE public.device_allowances SET remaining_quota = v_quota, last_seen_at = now() WHERE device_id = v_device_id;
+    UPDATE public.profiles SET remaining_quota = v_quota, updated_at = now() WHERE device_id = v_device_id AND id != v_uid;
+  END IF;
+
   INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
   VALUES (v_uid, -p_amount, 'DELETE_PHOTO', v_quota, p_ref_id);
 
@@ -371,6 +449,143 @@ GRANT EXECUTE ON FUNCTION public.submit_payment(text, text, text)  TO authentica
 GRANT EXECUTE ON FUNCTION public.approve_payment(text, text)       TO authenticated;  -- dijaga is_admin()
 GRANT EXECUTE ON FUNCTION public.reject_payment(text, text)        TO authenticated;  -- dijaga is_admin()
 GRANT EXECUTE ON FUNCTION public.grant_ad_reward(uuid, text)       TO service_role;
+
+-- 8b. UPDATE DEVICE INFO HELPER ---------------------------------------------
+CREATE OR REPLACE FUNCTION public.update_device_info(
+  p_device_id text DEFAULT NULL,
+  p_device_brand text DEFAULT NULL,
+  p_device_model text DEFAULT NULL,
+  p_os_version text DEFAULT NULL,
+  p_device_platform text DEFAULT NULL,
+  p_device_summary text DEFAULT NULL
+)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN json_build_object('success', false, 'error', 'UNAUTHENTICATED');
+  END IF;
+
+  UPDATE public.profiles
+  SET
+    device_id = COALESCE(p_device_id, device_id),
+    device_brand = COALESCE(p_device_brand, device_brand),
+    device_model = COALESCE(p_device_model, device_model),
+    os_version = COALESCE(p_os_version, os_version),
+    device_platform = COALESCE(p_device_platform, device_platform),
+    device_summary = COALESCE(p_device_summary, device_summary),
+    last_sign_in_at = now(),
+    updated_at = now()
+  WHERE id = auth.uid();
+
+  RETURN json_build_object('success', true);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.update_device_info TO authenticated;
+
+-- 8c. CLAIM DEVICE WELCOME QUOTA (SHARED DEVICE POOL) ------------------------
+CREATE OR REPLACE FUNCTION public.claim_device_welcome_quota(
+  p_device_id       TEXT,
+  p_device_brand    TEXT DEFAULT NULL,
+  p_device_model    TEXT DEFAULT NULL,
+  p_os_version      TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_uid            UUID := auth.uid();
+  v_profile        public.profiles%ROWTYPE;
+  v_existing_allow public.device_allowances%ROWTYPE;
+  v_pool_quota     INT := 0;
+  v_is_first_claim BOOLEAN := false;
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN json_build_object('success', false, 'error', 'UNAUTHENTICATED');
+  END IF;
+
+  IF p_device_id IS NULL OR length(trim(p_device_id)) = 0 THEN
+    RETURN json_build_object('success', false, 'error', 'INVALID_DEVICE_ID');
+  END IF;
+
+  SELECT * INTO v_profile FROM public.profiles WHERE id = v_uid;
+  IF NOT FOUND THEN
+    RETURN json_build_object('success', false, 'error', 'PROFILE_NOT_FOUND');
+  END IF;
+
+  -- Kunci baris hardware di device_allowances
+  SELECT * INTO v_existing_allow FROM public.device_allowances WHERE device_id = p_device_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    -- PERANGKAT BARU PERTAMA KALI: Buat pool kuota baru (10 untuk Google, 5 untuk Guest)
+    v_is_first_claim := true;
+    v_pool_quota := CASE WHEN v_profile.is_guest THEN 5 ELSE 10 END;
+
+    INSERT INTO public.device_allowances (
+      device_id, first_user_id, first_auth_type, bonus_claimed,
+      remaining_quota, claimed_at, last_seen_at, device_brand, device_model, os_version
+    ) VALUES (
+      p_device_id, v_uid, CASE WHEN v_profile.is_guest THEN 'guest' ELSE 'google' END,
+      true, v_pool_quota, now(), now(), p_device_brand, p_device_model, p_os_version
+    );
+
+    UPDATE public.profiles
+    SET remaining_quota = v_pool_quota,
+        device_id = p_device_id,
+        device_brand = COALESCE(p_device_brand, device_brand),
+        device_model = COALESCE(p_device_model, device_model),
+        os_version = COALESCE(p_os_version, os_version),
+        updated_at = now()
+    WHERE id = v_uid;
+
+    IF NOT EXISTS (SELECT 1 FROM public.quota_ledger WHERE user_id = v_uid) THEN
+      INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+      VALUES (v_uid, v_pool_quota, 'INITIAL', v_pool_quota, 'welcome_' || p_device_id);
+    END IF;
+
+  ELSE
+    -- PERANGKAT SUDAH TERDAFTAR: Akun apa pun di HP ini mengikuti sisa pool kuota perangkat
+    v_pool_quota := v_existing_allow.remaining_quota;
+
+    UPDATE public.device_allowances
+    SET last_seen_at = now(),
+        device_brand = COALESCE(p_device_brand, device_brand),
+        device_model = COALESCE(p_device_model, device_model),
+        os_version = COALESCE(p_os_version, os_version)
+    WHERE device_id = p_device_id;
+
+    -- Update profil user saat ini agar nilainya identik dengan sisa kuota hardware
+    UPDATE public.profiles
+    SET remaining_quota = v_pool_quota,
+        device_id = p_device_id,
+        device_brand = COALESCE(p_device_brand, device_brand),
+        device_model = COALESCE(p_device_model, device_model),
+        os_version = COALESCE(p_os_version, os_version),
+        updated_at = now()
+    WHERE id = v_uid;
+
+    -- Catat initial sync di ledger jika akun baru
+    IF NOT EXISTS (SELECT 1 FROM public.quota_ledger WHERE user_id = v_uid) THEN
+      INSERT INTO public.quota_ledger (user_id, delta, reason, balance_after, ref_id)
+      VALUES (v_uid, v_pool_quota, 'INITIAL', v_pool_quota, 'shared_device_' || p_device_id);
+    END IF;
+  END IF;
+
+  RETURN json_build_object(
+    'success', true,
+    'bonus_granted', true,
+    'is_first_device_claim', v_is_first_claim,
+    'remaining_quota', v_pool_quota,
+    'is_pro', v_profile.is_pro
+  );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.claim_device_welcome_quota(TEXT, TEXT, TEXT, TEXT) TO authenticated;
 
 -- 9. STORAGE: bucket privat bukti bayar -------------------------------------
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
