@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import 'home_screen.dart';
@@ -19,67 +20,32 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final user = await AuthService.loginWithGoogle();
       if (!mounted) return;
-      if (user == null) {
-        // User membatalkan pemilihan akun Google
-        return;
+      if (user != null) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Selamat datang, ${user.name}!'),
-          backgroundColor: AppTheme.qrisGreenDark,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-      );
     } catch (e) {
       if (!mounted) return;
-      // Tangani error konfigurasi Google Cloud / OAuth pada mode debug
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Google Sign-In: Perlu konfigurasi SHA-1 / OAuth Client ID.\nError: $e',
-          ),
-          backgroundColor: Colors.red.shade700,
+          content: Text('Gagal login Google: $e'),
+          backgroundColor: AppTheme.dangerRed,
           behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'Mode Dev',
-            textColor: Colors.amber,
-            onPressed: () async {
-              final devUser = await AuthService.loginWithGoogleDevFallback();
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Masuk via Mode Dev: ${devUser.name}'),
-                  backgroundColor: AppTheme.qrisGreenDark,
-                ),
-              );
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(builder: (_) => const HomeScreen()),
-              );
-            },
-          ),
         ),
       );
     } finally {
-      if (mounted) setState(() => _isLoadingGoogle = false);
+      if (mounted) {
+        setState(() => _isLoadingGoogle = false);
+      }
     }
   }
 
-  Future<void> _handleGuestSignIn() async {
+  Future<void> _handleGuestLogin() async {
     setState(() => _isLoadingGuest = true);
     try {
       await AuthService.loginAsGuest();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Masuk dalam Mode Tamu (Akses Penuh).'),
-          backgroundColor: AppTheme.primary,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
@@ -88,236 +54,349 @@ class _LoginScreenState extends State<LoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Gagal masuk sebagai tamu: $e'),
-          backgroundColor: Colors.red,
+          backgroundColor: AppTheme.dangerRed,
           behavior: SnackBarBehavior.floating,
         ),
       );
     } finally {
-      if (mounted) setState(() => _isLoadingGuest = false);
+      if (mounted) {
+        setState(() => _isLoadingGuest = false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 3-Tone Carbon & Alabaster Fintech Palette
+    const bgCanvas = AppTheme.backgroundDark; // #0A0E0D Carbon Obsidian
+    const cardSurface = AppTheme.surfaceDark; // #121816 Matte Graphite
+    const subtleSurface = AppTheme.surfaceSubtleDark; // #18201D
+    const borderHairline = AppTheme.borderDark; // #232D29
+    const inkPrimary = AppTheme.textLight; // #F1F5F3 Crisp Chalk
+    const inkMuted = AppTheme.textMutedDark; // #8E9993 Mineral Slate
+    const accentEmerald = AppTheme.qrisGreen; // #0B8760 Verification Emerald
 
     return Scaffold(
+      backgroundColor: bgCanvas,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
+              constraints: const BoxConstraints(maxWidth: 420),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Hero Icon Container with Glow & Gradient
-                  Center(
-                    child: Container(
-                      width: 88,
-                      height: 88,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            AppTheme.primary,
-                            AppTheme.primary.withOpacity(0.8),
-                          ],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(24),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppTheme.primary.withOpacity(0.35),
-                            blurRadius: 24,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.qr_code_scanner_rounded,
-                          color: Colors.white,
-                          size: 46,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // App Title & Tagline
+                  // Top Technical Status Bar
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'QRIS Detector',
-                        style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.5,
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: cardSurface,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: borderHairline),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(
+                                color: accentEmerald,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 7),
+                            Text(
+                              'EMVCo / BI QRIS INSPECTOR',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.8,
+                                color: inkMuted,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppTheme.qrisGreen.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppTheme.qrisGreen.withOpacity(0.3)),
-                        ),
-                        child: const Text(
-                          'AI',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.qrisGreenDark,
-                          ),
+                      Text(
+                        'v1.0',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: inkMuted,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Kelola, validasi, dan bersihkan bukti transaksi QRIS galeri ponsel Anda dengan cepat dan aman.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.45,
-                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                    ),
-                  ),
+
                   const SizedBox(height: 28),
 
-                  // Feature Benefit Badges
+                  // Main Identity & Optical Scanner Card
                   Container(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                      ),
+                      color: cardSurface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: borderHairline, width: 1),
                     ),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildFeatureRow(
-                          icon: Icons.bolt_rounded,
-                          iconColor: Colors.amber,
-                          title: 'Pemindaian Paralel AI',
-                          subtitle: 'Pindai ratusan foto galeri dalam hitungan detik.',
-                          isDark: isDark,
+                        Row(
+                          children: [
+                            // Tactile Optical Viewfinder Emblem
+                            Container(
+                              width: 52,
+                              height: 52,
+                              decoration: BoxDecoration(
+                                color: subtleSurface,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: accentEmerald.withOpacity(0.55),
+                                  width: 1.2,
+                                ),
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.qr_code_scanner_rounded,
+                                  size: 26,
+                                  color: Color(0xFF34D399),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'QRIS Detector',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w800,
+                                      color: inkPrimary,
+                                      letterSpacing: -0.6,
+                                      height: 1.15,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    'Gallery Audit & CRC16 Validator',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: const Color(0xFF34D399),
+                                      letterSpacing: -0.1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 12),
-                        _buildFeatureRow(
-                          icon: Icons.security_rounded,
-                          iconColor: AppTheme.qrisGreen,
-                          title: 'Privasi Terjaga 100%',
-                          subtitle: 'Pemrosesan on-device tanpa unggah ke server.',
-                          isDark: isDark,
-                        ),
-                        const SizedBox(height: 12),
-                        _buildFeatureRow(
-                          icon: Icons.delete_sweep_rounded,
-                          iconColor: AppTheme.primary,
-                          title: 'Pembersihan Massal Hemat Ruang',
-                          subtitle: 'Hapus bukti transfer usang untuk melegakan memori.',
-                          isDark: isDark,
+                        const SizedBox(height: 18),
+                        Container(height: 1, color: borderHairline),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Deteksi, verifikasi keaslian payload QRIS, dan bersihkan tumpukan gambar QR di galeri perangkat secara presisi.',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 13.5,
+                            color: inkMuted,
+                            height: 1.5,
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 32),
 
-                  // Button 1: Login with Google
-                  ElevatedButton(
-                    onPressed: (_isLoadingGoogle || _isLoadingGuest) ? null : _handleGoogleSignIn,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
-                      foregroundColor: isDark ? Colors.white : const Color(0xFF1F2937),
-                      elevation: 1,
-                      shadowColor: Colors.black.withOpacity(0.1),
-                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        side: BorderSide(
-                          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
-                        ),
-                      ),
-                    ),
-                    child: _isLoadingGoogle
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              _buildGoogleIcon(),
-                              const SizedBox(width: 12),
-                              const Text(
-                                'Lanjutkan dengan Google',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
                   const SizedBox(height: 12),
 
-                  // Button 2: Guest User Login
-                  OutlinedButton(
-                    onPressed: (_isLoadingGoogle || _isLoadingGuest) ? null : _handleGuestSignIn,
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: isDark
-                          ? AppTheme.primary.withOpacity(0.12)
-                          : const Color(0xFFF1F5F9),
-                      foregroundColor: isDark ? Colors.white : const Color(0xFF1E293B),
-                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                      side: BorderSide(
-                        color: isDark ? AppTheme.primary.withOpacity(0.4) : const Color(0xFFCBD5E1),
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                  // 3-Column Specification Ledger (Preserves exact test labels)
+                  Container(
+                    decoration: BoxDecoration(
+                      color: cardSurface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: borderHairline, width: 1),
+                    ),
+                    child: IntrinsicHeight(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildLedgerSpec(
+                              icon: Icons.verified_user_outlined,
+                              value: 'GOOGLE',
+                              label: '10 Kuota Hapus',
+                              accent: const Color(0xFF34D399),
+                            ),
+                          ),
+                          Container(width: 1, color: borderHairline),
+                          Expanded(
+                            child: _buildLedgerSpec(
+                              icon: Icons.person_outline_rounded,
+                              value: 'TAMU',
+                              label: '5 Kuota / Hari',
+                              accent: AppTheme.qrAmber,
+                            ),
+                          ),
+                          Container(width: 1, color: borderHairline),
+                          Expanded(
+                            child: _buildLedgerSpec(
+                              icon: Icons.sync_lock_rounded,
+                              value: 'BACKUP',
+                              label: 'Cloud Sync',
+                              accent: inkPrimary,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    child: _isLoadingGuest
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.person_outline_rounded,
-                                size: 20,
-                                color: AppTheme.primary,
-                              ),
-                              SizedBox(width: 10),
-                              Text(
-                                'Masuk sebagai Tamu (Guest)',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
                   ),
-                  const SizedBox(height: 24),
 
-                  // Privacy / Terms Note
-                  Text(
-                    'Dengan masuk, Anda menyetujui Ketentuan Layanan & Kebijakan Privasi QRIS Detector.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                  const SizedBox(height: 20),
+
+                  // Authentication Action Card
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: cardSurface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: borderHairline, width: 1),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Primary Action: Google Sign In (High-Contrast Alabaster on Carbon)
+                        SizedBox(
+                          height: 50,
+                          child: ElevatedButton(
+                            onPressed: (_isLoadingGoogle || _isLoadingGuest)
+                                ? null
+                                : _handleGoogleSignIn,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: inkPrimary,
+                              foregroundColor: AppTheme.textDark,
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              disabledBackgroundColor: inkPrimary.withOpacity(0.5),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: _isLoadingGoogle
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.2,
+                                      color: AppTheme.textDark,
+                                    ),
+                                  )
+                                : Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Container(
+                                        width: 22,
+                                        height: 22,
+                                        decoration: BoxDecoration(
+                                          color: AppTheme.textDark,
+                                          borderRadius: BorderRadius.circular(5),
+                                        ),
+                                        alignment: Alignment.center,
+                                        child: Text(
+                                          'G',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w800,
+                                            color: inkPrimary,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Flexible(
+                                        child: Text(
+                                          'Lanjutkan dengan Google',
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppTheme.textDark,
+                                            letterSpacing: -0.2,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 10),
+
+                        // Secondary Action: Guest Mode
+                        SizedBox(
+                          height: 48,
+                          child: OutlinedButton(
+                            onPressed: (_isLoadingGoogle || _isLoadingGuest)
+                                ? null
+                                : _handleGuestLogin,
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: subtleSurface,
+                              foregroundColor: inkPrimary,
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              side: const BorderSide(color: borderHairline, width: 1),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: _isLoadingGuest
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: inkPrimary,
+                                    ),
+                                  )
+                                : Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(
+                                        Icons.person_outline_rounded,
+                                        size: 18,
+                                        color: inkMuted,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Flexible(
+                                        child: Text(
+                                          'Masuk sebagai Tamu (Guest)',
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: inkPrimary,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 14),
+                        Text(
+                          'Login Google memberikan 10 kuota hapus awal & sinkronisasi otomatis.',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            color: inkMuted,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -329,103 +408,40 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildFeatureRow({
+  Widget _buildLedgerSpec({
     required IconData icon,
-    required Color iconColor,
-    required String title,
-    required String subtitle,
-    required bool isDark,
+    required String value,
+    required String label,
+    required Color accent,
   }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(7),
-          decoration: BoxDecoration(
-            color: iconColor.withOpacity(0.14),
-            borderRadius: BorderRadius.circular(10),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: accent, size: 17),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.7,
+              color: AppTheme.textMutedDark,
+            ),
           ),
-          child: Icon(icon, size: 16, color: iconColor),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 1),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                ),
-              ),
-            ],
+          const SizedBox(height: 2),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textLight,
+            ),
           ),
-        ),
-      ],
-    );
-  }
-
-  /// Custom Google 'G' Multi-Color Icon
-  Widget _buildGoogleIcon() {
-    return SizedBox(
-      width: 20,
-      height: 20,
-      child: CustomPaint(
-        painter: _GoogleLogoPainter(),
+        ],
       ),
     );
   }
-}
-
-/// Custom Painter for Google 'G' Logo (Blue, Red, Yellow, Green)
-class _GoogleLogoPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double w = size.width;
-    final double h = size.height;
-    final center = Offset(w / 2, h / 2);
-    final radius = w / 2;
-
-    final bluePaint = Paint()..color = const Color(0xFF4285F4);
-
-    final rect = Rect.fromCircle(center: center, radius: radius);
-
-    // Blue horizontal bar
-    final barRect = Rect.fromLTWH(w * 0.45, h * 0.38, w * 0.55, h * 0.24);
-    canvas.drawRRect(RRect.fromRectAndRadius(barRect, const Radius.circular(2)), bluePaint);
-
-    // Draw Google Circular arcs
-    final strokePaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = w * 0.22
-      ..strokeCap = StrokeCap.butt;
-
-    // Blue arc (right)
-    strokePaint.color = const Color(0xFF4285F4);
-    canvas.drawArc(rect.deflate(w * 0.11), -0.7, 1.4, false, strokePaint);
-
-    // Green arc (bottom)
-    strokePaint.color = const Color(0xFF34A853);
-    canvas.drawArc(rect.deflate(w * 0.11), 0.7, 1.6, false, strokePaint);
-
-    // Yellow arc (left)
-    strokePaint.color = const Color(0xFFFBBC05);
-    canvas.drawArc(rect.deflate(w * 0.11), 2.3, 1.6, false, strokePaint);
-
-    // Red arc (top)
-    strokePaint.color = const Color(0xFFEA4335);
-    canvas.drawArc(rect.deflate(w * 0.11), 3.9, 1.5, false, strokePaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

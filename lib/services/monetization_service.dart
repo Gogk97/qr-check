@@ -104,22 +104,28 @@ class MonetizationService {
       builder: (context) {
         final isDark = Theme.of(context).brightness == Brightness.dark;
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: AppTheme.cardColor(isDark),
           title: Row(
             children: [
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
+                  color: AppTheme.qrAmber.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.workspace_premium, color: Colors.orange, size: 24),
+                child: const Icon(Icons.workspace_premium, color: AppTheme.qrAmber, size: 22),
               ),
-              const SizedBox(width: 12),
-              const Expanded(
+              const SizedBox(width: 10),
+              Expanded(
                 child: Text(
                   'Hapus Massal Foto',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                    color: AppTheme.inkColor(isDark),
+                  ),
                 ),
               ),
             ],
@@ -130,69 +136,70 @@ class MonetizationService {
             children: [
               Text(
                 'Anda memilih $itemCount foto sekaligus untuk dihapus.',
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5, color: AppTheme.inkColor(isDark)),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
                 'Pilih opsi di bawah ini untuk melanjutkan:',
                 style: TextStyle(
                   fontSize: 12,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  color: AppTheme.mutedColor(isDark),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               // Option A: Watch Video Ad
               Container(
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
                 ),
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  leading: const CircleAvatar(
-                    backgroundColor: AppTheme.primary,
-                    radius: 18,
-                    child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 22),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.play_arrow_rounded, color: AppTheme.primary, size: 20),
                   ),
-                  title: const Text(
+                  title: Text(
                     'Nonton Iklan Video (Gratis)',
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.inkColor(isDark)),
                   ),
-                  subtitle: const Text(
+                  subtitle: Text(
                     'Gratis 1x Hapus Massal setelah nonton iklan 3 detik',
-                    style: TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark)),
                   ),
                   onTap: () => Navigator.of(context).pop('watch_ad'),
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               // Option B: Upgrade PRO
               Container(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppTheme.qrisGreen.withOpacity(0.15),
-                      Colors.amber.withOpacity(0.15),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.qrisGreen.withOpacity(0.4)),
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.qrAmber.withOpacity(0.45)),
                 ),
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  leading: const CircleAvatar(
-                    backgroundColor: AppTheme.qrisGreenDark,
-                    radius: 18,
-                    child: Icon(Icons.star_rounded, color: Colors.white, size: 22),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppTheme.qrAmber.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.star_rounded, color: AppTheme.qrAmber, size: 20),
                   ),
                   title: const Text(
                     'Upgrade ke PRO (Rp 15.000)',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.qrisGreenDark),
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.qrAmber),
                   ),
-                  subtitle: const Text(
+                  subtitle: Text(
                     'Hapus tanpa batas & bebas semua iklan selamanya!',
-                    style: TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark)),
                   ),
                   onTap: () => Navigator.of(context).pop('buy_pro'),
                 ),
@@ -202,7 +209,7 @@ class MonetizationService {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop('cancel'),
-              child: const Text('Batal'),
+              child: Text('Batal', style: TextStyle(color: AppTheme.mutedColor(isDark), fontWeight: FontWeight.w600)),
             ),
           ],
         );
