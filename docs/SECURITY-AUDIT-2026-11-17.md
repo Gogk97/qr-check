@@ -159,9 +159,12 @@ Tidak ada file diubah oleh audit ini.
 
 ### Catatan trade-off (perlu diketahui)
 
-1. **Hapus foto sekarang butuh koneksi.** Tanpa jaringan, `consumeQuota` menolak dan UI
-   menampilkan pesan. Ini konsekuensi langsung dari "server-authoritative" — tidak ada
-   lagi kuota yang bisa dipakai gratis saat offline.
+1. **Hapus foto sekarang butuh koneksi** (user gratis). Tanpa jaringan, `consumeQuota`
+   menolak dan UI menampilkan pesan. User **PRO tetap bisa hapus offline** karena
+   tidak ada pemotongan kuota.
+   **Keputusan (2026-11-17): dipertahankan apa adanya.** Alternatif (antrian offline /
+   cache kuota lokal) mudah diakali; voucher offline bertanda tangan server dinilai
+   over-engineering untuk produk Rp 15.000.
 2. **Reward iklan masih client-trusted** (belum ada AdMob SSV). Batas 5/hari + rate limit
    membuat farming tidak ekonomis. Saat AdMob terpasang, ganti ke `grant_ad_reward`
    lewat Edge Function SSV dan hapus `claim_ad_reward`.
