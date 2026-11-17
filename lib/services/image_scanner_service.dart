@@ -6,6 +6,7 @@ import 'package:zxing2/qrcode.dart' hide BarcodeFormat;
 
 import '../models/scanned_item.dart';
 import 'qris_parser.dart';
+import '../utils/app_log.dart';
 
 class ImageScannerService {
   static final ImageScannerService _instance = ImageScannerService._internal();
@@ -52,7 +53,7 @@ class ImageScannerService {
             detectedCode = barcodes.first.rawValue;
           }
         } catch (e) {
-          debugPrint('ML Kit scanning error, fallback to ZXing: $e');
+          AppLog.d('ML Kit scanning error, fallback to ZXing: $e');
         }
       }
 

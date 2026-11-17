@@ -5,9 +5,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:label="QRIS Detector"
+        android:label="Qristal - Audit &amp; Bersihkan QRIS"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:usesCleartextTraffic="false"
         android:largeHeap="true">
         <activity
             android:name=".MainActivity"

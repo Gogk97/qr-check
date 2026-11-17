@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../screens/qris_payment_screen.dart';
 import '../theme/app_theme.dart';
 import 'auth_service.dart';
 import 'device_service.dart';
 import 'monetization_service.dart';
 import 'supabase_service.dart';
+import '../utils/app_log.dart';
 
 /// Layanan manajemen kuota penghapusan foto untuk pengguna QRIS Detector.
 ///
@@ -47,14 +47,27 @@ class QuotaService {
             await prefs.setInt(_quotaKey, serverQuota);
             await prefs.setInt(userQuotaKey, serverQuota);
             if (res['bonus_granted'] == false && res['message'] != null) {
-              debugPrint('⚠️ Anti-Abuse notice: ${res['message']}');
+              AppLog.d('⚠️ Anti-Abuse notice: ${res['message']}');
             }
             return serverQuota;
           }
         }
+
+        // Server menolak klaim (DEVICE_MISMATCH / DEVICE_LIMIT_REACHED /
+        // RATE_LIMITED). Jangan mengarang kuota lokal: pakai nilai server.
+        if (res is Map && res['remaining_quota'] != null) {
+          final serverQuota = (res['remaining_quota'] as num).toInt();
+          await prefs.setInt(_quotaKey, serverQuota);
+          await prefs.setInt(userQuotaKey, serverQuota);
+          if (res['is_pro'] == true) {
+            await MonetizationService.setProUser(true, userId: userId);
+          }
+          AppLog.d('⚠️ Klaim kuota ditolak server: ${res['error']}');
+          return serverQuota;
+        }
       }
     } catch (e) {
-      debugPrint('⚠️ Supabase claim_device_welcome_quota error: $e');
+      AppLog.d('⚠️ Supabase claim_device_welcome_quota error: $e');
     }
 
     final initializedList = prefs.getStringList(_initializedUsersKey) ?? [];
@@ -106,97 +119,128 @@ class QuotaService {
     return defaultQuota;
   }
 
-  /// Memeriksa apakah kuota mencukupi untuk menghapus sejumlah [needed] foto
+  /// Pesan error terakhir dari operasi kuota (untuk ditampilkan di UI).
+  static String? _lastQuotaError;
+  static String? get lastError => _lastQuotaError;
+
+  /// Memeriksa apakah kuota mencukupi untuk menghapus sejumlah [needed] foto.
+  /// Catatan: ini hanya untuk gating UI — keputusan final tetap di server
+  /// (`consume_quota`).
   static Future<bool> hasEnoughQuota(int needed) async {
     final isPro = await MonetizationService.isProUser();
-    if (isPro) return true; // PRO User = Unlimited
+    if (isPro) return true;
     final current = await getRemainingQuota();
     return current >= needed;
   }
 
-  /// Mengurangi kuota sebesar [count] secara atomik via Supabase RPC
-  static Future<bool> consumeQuota(int count, {String? userId}) async {
+  /// Mengurangi kuota secara atomik **di server**.
+  ///
+  /// Tidak ada fallback lokal: kalau server tidak bisa dihubungi, operasi
+  /// ditolak supaya kuota tidak bisa dipakai gratis saat offline.
+  static Future<bool> consumeQuota(
+    int count, {
+    String? userId,
+    String? refId,
+  }) async {
+    if (count <= 0) return true;
+    _lastQuotaError = null;
+
+    if (!SupabaseService.isAuthenticated) {
+      _lastQuotaError = 'Butuh koneksi internet untuk memotong kuota.';
+      return false;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     final currentUserId = userId ?? prefs.getString('last_active_user_id_v1');
-    final isPro = await MonetizationService.isProUser(userId: currentUserId);
-    if (isPro) return true; // PRO User tidak mengurangi kuota
+    final ref = refId ?? 'del_${DateTime.now().microsecondsSinceEpoch}';
 
-    // 1. Mutasi atomik di server Supabase
     try {
-      if (SupabaseService.isAuthenticated) {
-        final res = await SupabaseService.client.rpc('consume_quota', params: {
-          'p_amount': count,
-          'p_ref_id': 'del_${DateTime.now().millisecondsSinceEpoch}',
-        });
+      final res = await SupabaseService.client.rpc('consume_quota', params: {
+        'p_amount': count,
+        'p_ref_id': ref,
+      });
 
-        if (res is Map && res['success'] == true) {
-          final remaining = (res['remaining_quota'] as num?)?.toInt();
-          if (remaining != null) {
-            await prefs.setInt(_quotaKey, remaining);
-            if (currentUserId != null) {
-              await prefs.setInt('user_quota_v1_$currentUserId', remaining);
-            }
+      if (res is Map && res['success'] == true) {
+        final remaining = (res['remaining_quota'] as num?)?.toInt();
+        if (remaining != null) {
+          await prefs.setInt(_quotaKey, remaining);
+          if (currentUserId != null) {
+            await prefs.setInt('user_quota_v1_$currentUserId', remaining);
           }
-          return true;
-        } else if (res is Map && res['code'] == 'INSUFFICIENT_QUOTA') {
-          return false;
         }
+        return true;
       }
+
+      final code = res is Map ? res['code'] : null;
+      _lastQuotaError = switch (code) {
+        'INSUFFICIENT_QUOTA' => 'Kuota tidak cukup. Tonton iklan atau upgrade PRO.',
+        'RATE_LIMITED' => 'Terlalu banyak permintaan. Coba lagi sebentar.',
+        _ => 'Kuota gagal dipotong (${code ?? 'unknown'}).',
+      };
+      return false;
     } catch (e) {
-      debugPrint('⚠️ Supabase consume_quota error, fallback local: $e');
+      AppLog.d('⚠️ consume_quota gagal: $e');
+      _lastQuotaError = 'Tidak dapat menghubungi server. Coba lagi saat online.';
+      return false;
     }
-
-    // 2. Fallback offline
-    final current = await getRemainingQuota();
-    if (current < count) return false;
-
-    final newQuota = current - count;
-    await prefs.setInt(_quotaKey, newQuota);
-
-    if (currentUserId != null && currentUserId.isNotEmpty) {
-      await prefs.setInt('user_quota_v1_$currentUserId', newQuota);
-    }
-
-    return true;
   }
 
-  /// Menambah kuota sebesar [amount] (misal: +1 dari menonton video sponsor) via Supabase RPC
+  /// Kembalikan kuota yang sudah terpotong bila penghapusan dibatalkan.
+  /// Idempoten di server: satu [refId] hanya bisa di-refund sekali.
+  static Future<void> refundQuota(String refId, int amount) async {
+    if (amount <= 0 || !SupabaseService.isAuthenticated) return;
+    try {
+      await SupabaseService.client.rpc('refund_quota', params: {
+        'p_ref_id': refId,
+        'p_amount': amount,
+      });
+    } catch (e) {
+      AppLog.d('⚠️ refund_quota gagal: $e');
+    }
+  }
+
+  /// Menambah kuota lewat server (RPC `claim_ad_reward`).
+  /// Tidak ada penambahan lokal: kalau server menolak/gagal, kuota tidak berubah.
   static Future<int> addQuota(int amount, {String? userId}) async {
     final prefs = await SharedPreferences.getInstance();
     final currentUserId = userId ?? prefs.getString('last_active_user_id_v1');
+    final current = await getRemainingQuota();
+    _lastQuotaError = null;
 
-    // 1. Eksekusi di server Supabase
+    if (amount <= 0) return current;
+    if (!SupabaseService.isAuthenticated) {
+      _lastQuotaError = 'Butuh koneksi internet untuk menambah kuota.';
+      return current;
+    }
+
     try {
-      if (SupabaseService.isAuthenticated) {
-        final res = await SupabaseService.client.rpc('claim_ad_reward', params: {
-          'p_ref_id': 'ad_${DateTime.now().millisecondsSinceEpoch}',
-        });
+      final res = await SupabaseService.client.rpc('claim_ad_reward', params: {
+        'p_ref_id': 'ad_${DateTime.now().microsecondsSinceEpoch}',
+      });
 
-        if (res is Map && res['success'] == true) {
-          final remaining = (res['remaining_quota'] as num?)?.toInt();
-          if (remaining != null) {
-            await prefs.setInt(_quotaKey, remaining);
-            if (currentUserId != null) {
-              await prefs.setInt('user_quota_v1_$currentUserId', remaining);
-            }
-            return remaining;
+      if (res is Map && res['success'] == true) {
+        final remaining = (res['remaining_quota'] as num?)?.toInt();
+        if (remaining != null) {
+          await prefs.setInt(_quotaKey, remaining);
+          if (currentUserId != null) {
+            await prefs.setInt('user_quota_v1_$currentUserId', remaining);
           }
+          return remaining;
         }
       }
+
+      final code = res is Map ? res['code'] : null;
+      _lastQuotaError = switch (code) {
+        'DAILY_LIMIT_REACHED' => 'Batas reward iklan harian tercapai.',
+        'RATE_LIMITED' => 'Terlalu cepat. Coba lagi beberapa saat.',
+        _ => 'Reward iklan gagal diklaim (${code ?? 'unknown'}).',
+      };
     } catch (e) {
-      debugPrint('⚠️ Supabase claim_ad_reward error, fallback local: $e');
+      AppLog.d('⚠️ claim_ad_reward gagal: $e');
+      _lastQuotaError = 'Tidak dapat menghubungi server. Coba lagi saat online.';
     }
 
-    // 2. Fallback offline
-    final current = await getRemainingQuota();
-    final newQuota = current + amount;
-    await prefs.setInt(_quotaKey, newQuota);
-
-    if (currentUserId != null && currentUserId.isNotEmpty) {
-      await prefs.setInt('user_quota_v1_$currentUserId', newQuota);
-    }
-
-    return newQuota;
+    return current;
   }
 
   /// Reset Kuota (untuk kebutuhan Developer / Testing)
@@ -392,7 +436,7 @@ class QuotaService {
                     child: const Icon(Icons.workspace_premium_rounded, color: AppTheme.qrAmber, size: 20),
                   ),
                   title: const Text(
-                    'Upgrade ke PRO (Rp 15.000)',
+                    'Upgrade ke PRO (Lifetime)',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.qrAmber),
                   ),
                   subtitle: Text(
@@ -419,10 +463,7 @@ class QuotaService {
       return await watchRewardedAdForQuota(context);
     } else if (result == 'buy_pro') {
       if (!context.mounted) return false;
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
-      );
-      return false;
+      return MonetizationService.openProPurchase(context);
     }
 
     return false;
@@ -534,11 +575,9 @@ class QuotaService {
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
-                  onPressed: () {
+                  onPressed: () async {
                     Navigator.of(ctx).pop();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
-                    );
+                    await MonetizationService.openProPurchase(context);
                   },
                   icon: const Icon(Icons.workspace_premium_rounded, color: AppTheme.qrAmber, size: 18),
                   label: const Text('Beli PRO (Tanpa Batas Kuota)', style: TextStyle(color: AppTheme.qrAmber, fontWeight: FontWeight.w800)),

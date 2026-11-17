@@ -1,11 +1,11 @@
 {
-    "name": "qr_check",
-    "short_name": "qr_check",
+    "name": "Qristal - Audit & Bersihkan QRIS",
+    "short_name": "Qristal",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0A0E0D",
+    "theme_color": "#0B8760",
+    "description": "Qristal - Audit & Bersihkan QRIS di Galeri Perangkat.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

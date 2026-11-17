@@ -41,3 +41,19 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android release signing (JANGAN pernah di-commit)
+/android/key.properties
+/android/upload-keystore.jks
+/android/upload-keystore.p12
+/android/KEYSTORE_BACKUP.txt
+*.jks
+*.keystore
+*.p12
+
+# Service account & secret lokal
+/secrets/
+*.serviceaccount.json
+
+# Catatan operasional & kredensial
+/private/

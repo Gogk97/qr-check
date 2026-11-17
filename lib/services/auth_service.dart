@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -9,6 +8,7 @@ import 'device_service.dart';
 import 'monetization_service.dart';
 import 'quota_service.dart';
 import 'supabase_service.dart';
+import '../utils/app_log.dart';
 
 class AuthService {
   static const String _userKey = 'current_user_v1';
@@ -36,7 +36,7 @@ class AuthService {
       if (raw == null || raw.isEmpty) return null;
       return UserModel.fromJson(jsonDecode(raw));
     } catch (e) {
-      debugPrint('Error getting current user: $e');
+      AppLog.d('Error getting current user: $e');
       return null;
     }
   }
@@ -77,7 +77,7 @@ class AuthService {
       await syncDeviceInfoToServer();
       return user;
     } catch (e) {
-      debugPrint('⚠️ Supabase Anonymous login error, fallback local: $e');
+      AppLog.d('⚠️ Supabase Anonymous login error, fallback local: $e');
       final fallbackUser = UserModel.guest();
       await _persistUser(fallbackUser);
       await QuotaService.initQuotaForLogin(isGoogle: false, userId: fallbackUser.id);
@@ -111,7 +111,7 @@ class AuthService {
             userId = res.user!.id;
           }
         } catch (supaErr) {
-          debugPrint('⚠️ Supabase ID token exchange warning: $supaErr');
+          AppLog.d('⚠️ Supabase ID token exchange warning: $supaErr');
         }
       }
 
@@ -128,32 +128,9 @@ class AuthService {
       await syncDeviceInfoToServer();
       return user;
     } catch (e) {
-      debugPrint('Google Sign-In Error: $e');
+      AppLog.d('Google Sign-In Error: $e');
       rethrow;
     }
-  }
-
-  /// Fallback Dev Login Google jika Google Play Services / SHA-1 belum dipasang di environment dev
-  static Future<UserModel> loginWithGoogleDevFallback() async {
-    // Coba anonymous sign in sebagai dev session di Supabase
-    String userId = 'dev_google_user';
-    try {
-      final authRes = await SupabaseService.client.auth.signInAnonymously();
-      if (authRes.user != null) {
-        userId = authRes.user!.id;
-      }
-    } catch (_) {}
-
-    final user = UserModel.googleUser(
-      id: userId,
-      name: 'Google User (Dev)',
-      email: 'dev.tester@gmail.com',
-      avatarUrl: null,
-    );
-    await _persistUser(user);
-    await QuotaService.initQuotaForLogin(isGoogle: true, userId: user.id);
-    await MonetizationService.isProUser(userId: user.id);
-    return user;
   }
 
   /// Logout dan bersihkan data sesi
@@ -164,7 +141,7 @@ class AuthService {
         await _googleSignIn.signOut();
       }
     } catch (e) {
-      debugPrint('Error during Sign-Out: $e');
+      AppLog.d('Error during Sign-Out: $e');
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_userKey);
@@ -183,7 +160,7 @@ class AuthService {
           UserAttributes(data: details),
         );
       } catch (e) {
-        debugPrint('⚠️ Auth metadata update notice: $e');
+        AppLog.d('⚠️ Auth metadata update notice: $e');
       }
 
       // 2. Simpan ke tabel profiles via RPC SECURITY DEFINER
@@ -195,9 +172,9 @@ class AuthService {
         'p_device_platform': details['device_platform'],
         'p_device_summary': details['device_summary'],
       });
-      debugPrint('📱 Device info synced to Supabase: ${details['device_summary']}');
+      AppLog.d('📱 Device info synced to Supabase: ${details['device_summary']}');
     } catch (e) {
-      debugPrint('⚠️ Failed to sync device info: $e');
+      AppLog.d('⚠️ Failed to sync device info: $e');
     }
   }
 

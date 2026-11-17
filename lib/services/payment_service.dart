@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/payment_record.dart';
 import 'supabase_service.dart';
+import '../utils/app_log.dart';
 
 /// Layanan pembayaran QRIS dengan integrasi Supabase Storage & Database.
 ///
@@ -49,9 +49,11 @@ class PaymentService {
               bytes,
               fileOptions: FileOptions(contentType: mimeType, upsert: true),
             );
-            debugPrint('✅ Payment proof uploaded to Supabase Storage: $remoteStoragePath');
+            AppLog.d('✅ Payment proof uploaded to Supabase Storage: $remoteStoragePath');
           } catch (uploadErr) {
-            debugPrint('⚠️ Storage upload warning: $uploadErr');
+            // Bukti bayar wajib ada: jangan buat record pembayaran tanpa bukti.
+            AppLog.d('❌ Payment proof upload failed: $uploadErr');
+            return false;
           }
         }
       }
@@ -64,9 +66,9 @@ class PaymentService {
           'p_notes': record.notes,
         });
 
-        debugPrint('✅ Payment RPC response: $res');
+        AppLog.d('✅ Payment RPC response: $res');
       } catch (rpcErr) {
-        debugPrint('⚠️ RPC submit_payment failed, fallback direct insert: $rpcErr');
+        AppLog.d('⚠️ RPC submit_payment failed, fallback direct insert: $rpcErr');
         // Fallback direct insert jika RPC belum match
         await supaClient.from('payments').insert({
           'id': record.id,
@@ -90,7 +92,7 @@ class PaymentService {
 
       return true;
     } catch (e) {
-      debugPrint('❌ Supabase payment submission error: $e');
+      AppLog.d('❌ Supabase payment submission error: $e');
       // Tetap simpan lokal agar user tidak kehilangan riwayat jika offline
       await savePaymentLocal(record);
       return false;
@@ -125,7 +127,7 @@ class PaymentService {
         }
       }
     } catch (e) {
-      debugPrint('⚠️ Get payments from Supabase error, fallback local: $e');
+      AppLog.d('⚠️ Get payments from Supabase error, fallback local: $e');
     }
 
     // 2. Fallback SharedPreferences

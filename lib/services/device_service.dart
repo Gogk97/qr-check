@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/app_log.dart';
 
 /// Service untuk identifikasi unik perangkat fisik secara persisten.
 ///
@@ -49,7 +50,7 @@ class DeviceService {
         deviceId = 'dev_${DateTime.now().millisecondsSinceEpoch}';
       }
     } catch (e) {
-      debugPrint('Error getting device ID: $e');
+      AppLog.d('Error getting device ID: $e');
       deviceId = 'device_${DateTime.now().millisecondsSinceEpoch}';
     }
 
@@ -99,7 +100,7 @@ class DeviceService {
         return summary;
       }
     } catch (e) {
-      debugPrint('Error getting device summary: $e');
+      AppLog.d('Error getting device summary: $e');
     }
 
     final fallback = Platform.operatingSystem;
@@ -145,7 +146,7 @@ class DeviceService {
         platformName = Platform.operatingSystem;
       }
     } catch (e) {
-      debugPrint('Error getting device details: $e');
+      AppLog.d('Error getting device details: $e');
     }
 
     return {

@@ -1,0 +1,13 @@
+# Template signing Android untuk Play Store.
+# Salin jadi android/key.properties lalu isi nilainya. JANGAN commit file aslinya.
+#
+# Buat keystore (sekali saja, simpan password di tempat aman):
+#   keytool -genkeypair -v -keystore android/upload-keystore.p12 -storetype PKCS12 \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# storeFile relatif terhadap folder android/app.
+
+storePassword=GANTI_PASSWORD_KEYSTORE
+keyPassword=GANTI_PASSWORD_KEY
+keyAlias=upload
+storeFile=../upload-keystore.p12

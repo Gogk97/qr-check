@@ -50,6 +50,8 @@ dependencies:
   google_sign_in: ^6.2.2
   device_info_plus: ^11.3.0
   supabase_flutter: ^2.15.4
+  # Sesi auth disimpan di Keystore/Keychain, bukan SharedPreferences plaintext.
+  flutter_secure_storage: ^10.3.4
 
 dev_dependencies:
   flutter_test:

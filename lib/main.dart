@@ -26,7 +26,7 @@ class QRCheckApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'QRIS & QR Detector',
+      title: 'Qristal - Audit & Bersihkan QRIS',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,

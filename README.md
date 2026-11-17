@@ -58,3 +58,28 @@ Proyek ini menerapkan pemisahan branch untuk menjaga stabilitas rilis:
    ```bash
    flutter run
    ```
+
+---
+
+## 💳 Monetisasi (Google Play Billing)
+
+Fitur PRO lifetime dijual sebagai **one-time product** `pro_lifetime` melalui Google Play
+Billing Library 8.3.0 (native bridge, tanpa plugin `in_app_purchase`).
+
+- Hak PRO **hanya** diberikan server-side: `verify-play-purchase` (Play Developer API +
+  acknowledge) → RPC `grant_pro_from_play`. Client tidak pernah menulis `is_pro`.
+- Refund/chargeback dicabut otomatis lewat RTDN (`play-rtdn` + Pub/Sub).
+- QRIS manual tetap ada, tetapi hanya dipakai di luar Android (iOS/Web/APK non-Play),
+  karena Play mewajibkan Play Billing untuk barang digital.
+
+Panduan lengkap (Play Console, service account, Pub/Sub, signing, testing):
+**`docs/google-play-billing.md`**
+
+Deploy backend sekali jalan:
+
+```bash
+SUPABASE_PROJECT_REF=<ref> \
+RTDN_AUDIENCE="https://<ref>.supabase.co/functions/v1/play-rtdn" \
+RTDN_SERVICE_ACCOUNT_EMAIL="play-rtdn-push@<gcp>.iam.gserviceaccount.com" \
+./scripts/deploy-play-billing.sh
+```

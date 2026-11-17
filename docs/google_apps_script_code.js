@@ -2,48 +2,39 @@
  * ============================================================================
  * GOOGLE APPS SCRIPT - MULTI-SPREADSHEET BACKEND FOR QRIS DETECTOR
  * ============================================================================
- * 
- * Target Google Spreadsheets resmi:
- * 1. Data Transaksi:
- *    https://docs.google.com/spreadsheets/d/19V_tDZ6Gi9n7JP3vqhkNWMdrZIwLpffx8qIdeqaMwMw
- * 
- * 2. Data User Login with Google:
- *    https://docs.google.com/spreadsheets/d/1FRAANDXXns0nx9Wi6XuWe3qmbNFMy3fdMrEVCi9eOq8
- * 
- * 3. Data User Guest:
- *    https://docs.google.com/spreadsheets/d/126GXtgjq68XN5IpypgHGmpUzemwossAyr4IOGCdLUl8
- * 
+ *
+ * ⚠️ LEGACY / TIDAK DIPAKAI LAGI OLEH APLIKASI.
+ *    Backend aplikasi sekarang Supabase. Skrip ini hanya referensi.
+ *    Kalau deployment lama masih hidup, MATIKAN (Deploy > Manage deployments
+ *    > Archive) karena endpoint-nya bisa ditulis siapa pun yang tahu URL.
+ *
+ * Spreadsheet ID TIDAK lagi ditulis di file ini. Isi lewat
+ * File > Project Settings > Script Properties:
+ *    SHEET_TRANSAKSI    = <id spreadsheet transaksi>
+ *    SHEET_USER_GOOGLE  = <id spreadsheet user google>
+ *    SHEET_USER_GUEST   = <id spreadsheet user guest>
+ *    SYNC_TOKEN         = <string acak panjang, dipakai klien sebagai "token">
+ *
  * ----------------------------------------------------------------------------
  * ATURAN KEAMANAN & INTEGRITAS DATA (STRICT POLICY):
  * 1. HANYA MENAMBAH (append) dan MEMPERBARUI (update) data.
- * 2. DILARANG KERAS MENGHAPUS DATA (Zero-Deletion Guarantee: tidak ada deleteRow/clear).
- * 3. Foto bukti pembayaran otomatis diupload ke Google Drive folder milik Anda.
- * ----------------------------------------------------------------------------
- * 
- * PANDUAN DEPLOYMENT (3 MENIT):
- * 1. Buka https://script.google.com/home/start atau buka menu Ekstensi > Apps Script
- *    pada salah satu spreadsheet di atas.
- * 2. Hapus seluruh isi editor bawaan, lalu paste seluruh skrip ini.
- * 3. Klik tombol Simpan (Save) 💾.
- * 4. Klik tombol "Terapkan" (Deploy) di kanan atas > pilih "Penerapan baru" (New deployment).
- * 5. Pilih jenis: "Aplikasi web" (Web app).
- * 6. Setelan:
- *    - Deskripsi : QRIS Detector Multi-Sheet Webhook
- *    - Jalankan sebagai (Execute as) : Saya (Me / email Google Anda)
- *    - Yang memiliki akses (Who has access) : Siapa saja (Anyone) <--- WAJIB
- * 7. Klik "Terapkan" (Deploy) & berikan izin akses Google ("Izinkan").
- * 8. Salin URL Aplikasi Web (https://script.google.com/macros/s/.../exec).
- * 9. Tempelkan URL tersebut ke aplikasi QRIS Detector (ikon ⚙️ di pojok kanan atas Layar Pembayaran).
+ * 2. DILARANG KERAS MENGHAPUS DATA (Zero-Deletion Guarantee).
+ * 3. Semua request doPost WAJIB menyertakan "token" yang cocok dengan
+ *    Script Property SYNC_TOKEN (tanpa itu → 401).
+ * 4. Foto bukti pembayaran diupload ke Google Drive folder milik Anda.
  * ============================================================================
  */
 
-// Target Spreadsheet IDs
+// Konfigurasi dibaca dari Script Properties (jangan hardcode di source).
+var _props = PropertiesService.getScriptProperties();
+
 var CONFIG = {
   SPREADSHEETS: {
-    TRANSAKSI: '19V_tDZ6Gi9n7JP3vqhkNWMdrZIwLpffx8qIdeqaMwMw',
-    USER_GOOGLE: '1FRAANDXXns0nx9Wi6XuWe3qmbNFMy3fdMrEVCi9eOq8',
-    USER_GUEST: '126GXtgjq68XN5IpypgHGmpUzemwossAyr4IOGCdLUl8'
+    TRANSAKSI: _props.getProperty('SHEET_TRANSAKSI') || '',
+    USER_GOOGLE: _props.getProperty('SHEET_USER_GOOGLE') || '',
+    USER_GUEST: _props.getProperty('SHEET_USER_GUEST') || ''
   },
+  SYNC_TOKEN: _props.getProperty('SYNC_TOKEN') || '',
   DRIVE_FOLDER_NAME: 'Bukti Pembayaran QRIS Detector'
 };
 
@@ -61,6 +52,15 @@ function doPost(e) {
     }
 
     var data = JSON.parse(e.postData.contents);
+
+    // Autentikasi wajib: token harus sama dengan Script Property SYNC_TOKEN.
+    if (!CONFIG.SYNC_TOKEN || data.token !== CONFIG.SYNC_TOKEN) {
+      return jsonResponse({
+        status: 'error',
+        message: 'Unauthorized'
+      });
+    }
+
     var action = data.action || 'RECORD_PAYMENT';
 
     // ─────────────────────────────────────────────────────────────
@@ -161,8 +161,7 @@ function doGet(e) {
   return jsonResponse({
     status: 'online',
     service: 'QRIS Detector Multi-Sheet Google Cloud Sync',
-    timestamp: new Date().toISOString(),
-    sheets: CONFIG.SPREADSHEETS
+    timestamp: new Date().toISOString()
   });
 }
 

@@ -186,11 +186,11 @@ class _QrisPaymentScreenState extends State<QrisPaymentScreen> {
     try {
       await Share.shareXFiles(
         [XFile(_qrisAssetPath)],
-        text: 'QRIS Pembayaran QRIS Detector PRO (Rp $_paymentAmount)',
+        text: 'QRIS Pembayaran Qristal PRO (Rp $_paymentAmount)',
       );
     } catch (_) {
       await Share.share(
-        'QRIS Pembayaran QRIS Detector PRO\nNominal: Rp $_paymentAmount\nNMID: ID2021095713545',
+        'QRIS Pembayaran Qristal PRO\nNominal: Rp $_paymentAmount\nNMID: ID2021095713545',
       );
     }
   }
@@ -684,7 +684,7 @@ class _QrisPaymentScreenState extends State<QrisPaymentScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'QRIS Detector PRO',
+                  'Qristal PRO',
                   style: TextStyle(
                     color: AppTheme.inkColor(isDark),
                     fontSize: 16,

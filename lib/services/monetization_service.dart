@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/qris_payment_screen.dart';
 import '../theme/app_theme.dart';
+import 'play_billing_service.dart';
 import 'supabase_service.dart';
 
 class MonetizationService {
@@ -194,7 +195,7 @@ class MonetizationService {
                     child: const Icon(Icons.star_rounded, color: AppTheme.qrAmber, size: 20),
                   ),
                   title: const Text(
-                    'Upgrade ke PRO (Rp 15.000)',
+                    'Upgrade ke PRO (Lifetime)',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.qrAmber),
                   ),
                   subtitle: Text(
@@ -241,77 +242,87 @@ class MonetizationService {
     return false;
   }
 
-  /// Modal Pembelian / Simulasi Aktivasi Fitur PRO
+  /// Titik masuk tunggal pembelian PRO.
+  /// Android (Play Store) -> Google Play Billing (wajib menurut kebijakan Play).
+  /// Platform lain (iOS/Web/Desktop) -> QRIS manual seperti sebelumnya.
+  static Future<bool> openProPurchase(BuildContext context) async {
+    if (PlayBillingService.isSupportedPlatform) {
+      return showProUpgradeModal(context);
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
+    );
+    return false;
+  }
+
+  /// Modal Pembelian PRO: Google Play Billing (Android) atau QRIS (platform lain).
   static Future<bool> showProUpgradeModal(BuildContext context) async {
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        return Container(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.amber.withOpacity(0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.workspace_premium, color: Colors.amber, size: 48),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Upgrade QRIS Detector PRO',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Nikmati kebebasan penuh tanpa batasan iklan!',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                ),
-              ),
-              const SizedBox(height: 20),
-              _buildFeatureRow(Icons.check_circle_rounded, 'Hapus Massal Foto Tanpa Batas'),
-              _buildFeatureRow(Icons.block_rounded, '100% Bebas Semua Jenis Iklan Selamanya'),
-              _buildFeatureRow(Icons.bolt_rounded, 'Pemindaian Galeri AI Ekstra Cepat'),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.qrisGreenDark,
-                  minimumSize: const Size(double.infinity, 50),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-                onPressed: () async {
-                  Navigator.of(context).pop(false);
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
-                  );
-                },
-                child: const Text(
-                  'Beli PRO Sekarang (Rp 15.000)',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Nanti Saja'),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (_) => const ProUpgradeSheet(),
     );
-
     return result ?? false;
+  }
+
+  /// Eksekusi pembelian PRO lewat Google Play (Android only).
+  /// Hak PRO baru diberikan setelah server memverifikasi purchase token.
+  static Future<ProUpgradeOutcome> purchaseProViaPlay({String? userId}) async {
+    final result = await PlayBillingService.purchase(obfuscatedAccountId: userId);
+
+    switch (result.status) {
+      case PlayPurchaseStatus.purchased:
+        final purchase = result.purchase;
+        if (purchase == null) {
+          return const ProUpgradeOutcome(false, 'Data pembelian dari Play Store tidak lengkap.');
+        }
+        final verified = await PlayBillingService.verifyOnServer(purchase);
+        if (!verified) {
+          return const ProUpgradeOutcome(
+            false,
+            'Pembayaran diterima Google Play, tetapi verifikasi server belum berhasil. '
+            'Coba tombol "Pulihkan Pembelian" beberapa saat lagi.',
+          );
+        }
+        await setProUser(true, userId: userId);
+        return const ProUpgradeOutcome(true, 'PRO aktif selamanya. Selamat menikmati!');
+
+      case PlayPurchaseStatus.alreadyOwned:
+        final restored = await restoreProPurchase(userId: userId);
+        return restored
+            ? const ProUpgradeOutcome(true, 'Pembelian PRO Anda berhasil dipulihkan.')
+            : const ProUpgradeOutcome(
+                false,
+                'Produk ini sudah dimiliki akun Google Play lain di perangkat ini.',
+              );
+
+      case PlayPurchaseStatus.pending:
+        return ProUpgradeOutcome(
+          false,
+          result.message ??
+              'Pembayaran sedang diproses Google Play. PRO aktif otomatis setelah pembayaran selesai.',
+        );
+
+      case PlayPurchaseStatus.canceled:
+        return const ProUpgradeOutcome(false, 'Pembelian dibatalkan.');
+
+      case PlayPurchaseStatus.unavailable:
+      case PlayPurchaseStatus.failed:
+        return ProUpgradeOutcome(false, result.message ?? 'Pembelian gagal diproses.');
+    }
+  }
+
+  /// Pulihkan pembelian PRO (reinstall, ganti perangkat, atau akun Play berbeda).
+  static Future<bool> restoreProPurchase({String? userId}) async {
+    final granted = await PlayBillingService.syncOwnedPurchases();
+    if (granted) {
+      await setProUser(true, userId: userId);
+    }
+    return granted;
   }
 
   static Widget _buildFeatureRow(IconData icon, String text) {
@@ -327,6 +338,349 @@ class MonetizationService {
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Hasil proses pembelian PRO (untuk feedback UI).
+class ProUpgradeOutcome {
+  final bool success;
+  final String message;
+
+  const ProUpgradeOutcome(this.success, this.message);
+}
+
+/// Bottom sheet upgrade PRO.
+///
+/// Android + Play Store tersedia -> Google Play Billing (one-time product).
+/// Platform lain (iOS/Web/Desktop) -> QRIS manual seperti sebelumnya.
+class ProUpgradeSheet extends StatefulWidget {
+  const ProUpgradeSheet({super.key});
+
+  @override
+  State<ProUpgradeSheet> createState() => _ProUpgradeSheetState();
+}
+
+class _ProUpgradeSheetState extends State<ProUpgradeSheet> {
+  bool _loadingPrice = true;
+  bool _busy = false;
+  bool _playReady = false;
+  bool _usePlay = PlayBillingService.isSupportedPlatform;
+  PlayProduct? _product;
+  String? _notice;
+  bool _noticeIsError = false;
+
+  bool get _isAndroid => _usePlay;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    if (!_usePlay) {
+      if (mounted) setState(() => _loadingPrice = false);
+      return;
+    }
+
+    // 0) Pastikan Play Store benar-benar tersedia (Huawei/emulator tanpa GMS).
+    final available = await PlayBillingService.isAvailable();
+    if (!mounted) return;
+    if (!available) {
+      setState(() {
+        _usePlay = false;
+        _loadingPrice = false;
+        _playReady = false;
+      });
+      return;
+    }
+
+    // 1) Coba pulihkan pembelian yang sudah dimiliki akun Play (reinstall / device baru).
+    final restored = await MonetizationService.restoreProPurchase();
+    if (!mounted) return;
+    if (restored) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+
+    // 2) Selesaikan transaksi yang tertunda verifikasinya (offline / server sempat down).
+    await PlayBillingService.retryPendingVerifications();
+
+    // 3) Ambil harga asli dari Play Store (sudah terformat sesuai mata uang user).
+    final product = await PlayBillingService.loadProduct();
+    if (!mounted) return;
+    setState(() {
+      _product = product;
+      _playReady = product != null;
+      _loadingPrice = false;
+      if (product == null) {
+        _notice =
+            'Katalog Play Store belum dapat dimuat. Pastikan aplikasi terpasang dari Play Store '
+            'dan akun Google sudah terdaftar sebagai license tester.';
+        _noticeIsError = true;
+      }
+    });
+  }
+
+  Future<void> _retryLoadPrice() async {
+    setState(() {
+      _loadingPrice = true;
+      _notice = null;
+    });
+    await _bootstrap();
+  }
+
+  Future<void> _buyViaPlay() async {
+    setState(() {
+      _busy = true;
+      _notice = null;
+    });
+    final userId = SupabaseService.isInitialized
+        ? SupabaseService.client.auth.currentUser?.id
+        : null;
+    final outcome = await MonetizationService.purchaseProViaPlay(userId: userId);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _notice = outcome.message;
+      _noticeIsError = !outcome.success;
+    });
+    if (outcome.success) {
+      Navigator.of(context).pop(true);
+    }
+  }
+
+  Future<void> _restore() async {
+    setState(() {
+      _busy = true;
+      _notice = null;
+    });
+    final ok = await MonetizationService.restoreProPurchase();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _notice = ok
+          ? 'PRO berhasil dipulihkan ke akun ini.'
+          : 'Tidak ada pembelian PRO yang bisa dipulihkan di akun Google Play ini.';
+      _noticeIsError = !ok;
+    });
+    if (ok) {
+      Navigator.of(context).pop(true);
+    }
+  }
+
+  void _buyViaQris() {
+    Navigator.of(context).pop(false);
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final ink = AppTheme.inkColor(isDark);
+    final muted = AppTheme.mutedColor(isDark);
+    final priceLabel = _product?.formattedPrice ?? kProFallbackPrice;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor(isDark),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: AppTheme.borderColor(isDark))),
+      ),
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 20,
+        bottom: 24 + MediaQuery.of(context).viewPadding.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 18),
+              decoration: BoxDecoration(
+                color: AppTheme.borderColor(isDark),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.qrAmber.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.workspace_premium_rounded, color: AppTheme.qrAmber, size: 26),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Upgrade Qristal PRO',
+                      style: TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.4,
+                        color: ink,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Sekali bayar, aktif selamanya.',
+                      style: TextStyle(fontSize: 12.5, color: muted, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+                icon: Icon(Icons.close_rounded, color: muted, size: 20),
+                tooltip: 'Tutup',
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppTheme.subtleBg(isDark),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.borderColor(isDark)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                MonetizationService._buildFeatureRow(
+                  Icons.check_circle_rounded,
+                  'Hapus massal foto tanpa batas',
+                ),
+                MonetizationService._buildFeatureRow(
+                  Icons.block_rounded,
+                  '100% bebas iklan selamanya',
+                ),
+                MonetizationService._buildFeatureRow(
+                  Icons.bolt_rounded,
+                  'Pemindaian galeri prioritas',
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (_notice != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: (_noticeIsError ? AppTheme.dangerRed : AppTheme.qrisGreen).withOpacity(0.10),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: (_noticeIsError ? AppTheme.dangerRed : AppTheme.qrisGreen).withOpacity(0.35),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    _noticeIsError ? Icons.info_outline_rounded : Icons.check_circle_outline_rounded,
+                    size: 16,
+                    color: _noticeIsError ? AppTheme.dangerRed : AppTheme.qrisGreen,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _notice!,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                        color: ink,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.qrisGreenDark,
+              disabledBackgroundColor: AppTheme.qrisGreenDark.withOpacity(0.5),
+              minimumSize: const Size(double.infinity, 52),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            onPressed: _busy
+                ? null
+                : (_isAndroid
+                    ? (_playReady ? _buyViaPlay : _retryLoadPrice)
+                    : _buyViaQris),
+            child: _busy || (_isAndroid && _loadingPrice)
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (_isAndroid) ...[
+                        const Icon(Icons.shop_rounded, size: 18, color: Colors.white),
+                        const SizedBox(width: 8),
+                      ],
+                      Flexible(
+                        child: Text(
+                          _isAndroid
+                              ? (_playReady
+                                  ? 'Beli PRO — $priceLabel'
+                                  : 'Muat Ulang Harga')
+                              : 'Beli PRO Sekarang ($kProFallbackPrice)',
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          if (_isAndroid) ...[
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.lock_outline_rounded, size: 12, color: muted),
+                const SizedBox(width: 4),
+                Text(
+                  'Pembayaran aman diproses Google Play',
+                  style: TextStyle(fontSize: 10.5, color: muted, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ),
+            TextButton(
+              onPressed: _busy ? null : _restore,
+              child: const Text(
+                'Pulihkan Pembelian',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppTheme.primary),
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+              child: Text('Nanti Saja', style: TextStyle(color: muted, fontWeight: FontWeight.w600)),
+            ),
+          ],
         ],
       ),
     );

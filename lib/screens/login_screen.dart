@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_logo.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -149,25 +150,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       children: [
                         Row(
                           children: [
-                            // Tactile Optical Viewfinder Emblem
-                            Container(
-                              width: 52,
-                              height: 52,
-                              decoration: BoxDecoration(
-                                color: subtleSurface,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: accentEmerald.withOpacity(0.55),
-                                  width: 1.2,
-                                ),
-                              ),
-                              child: const Center(
-                                child: Icon(
-                                  Icons.qr_code_scanner_rounded,
-                                  size: 26,
-                                  color: Color(0xFF34D399),
-                                ),
-                              ),
+                            // Opsi 03: The Q-Fiducial Monogram Logo
+                            const AppLogo(
+                              size: 52,
+                              forceDark: true,
                             ),
                             const SizedBox(width: 14),
                             Expanded(
@@ -175,7 +161,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'QRIS Detector',
+                                    'Qristal',
                                     style: GoogleFonts.plusJakartaSans(
                                       fontSize: 24,
                                       fontWeight: FontWeight.w800,
@@ -186,7 +172,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                   const SizedBox(height: 3),
                                   Text(
-                                    'Gallery Audit & CRC16 Validator',
+                                    'Audit & Bersihkan QRIS',
                                     style: GoogleFonts.plusJakartaSans(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,

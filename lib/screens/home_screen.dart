@@ -14,10 +14,11 @@ import '../services/monetization_service.dart';
 import '../services/notification_service.dart';
 import '../services/quota_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/scanned_item_card.dart';
 import '../widgets/stats_card.dart';
 import 'login_screen.dart';
-import 'qris_payment_screen.dart';
+import '../utils/app_log.dart';
 
 enum FilterMode {
   qrisOnly,
@@ -71,7 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
         AuthService.syncDeviceInfoToServer().ignore();
       }
     } catch (e) {
-      debugPrint('Profile sync on startup skipped: $e');
+      AppLog.d('Profile sync on startup skipped: $e');
     }
   }
 
@@ -111,7 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     } catch (e) {
-      debugPrint('Error loading items from storage: $e');
+      AppLog.d('Error loading items from storage: $e');
     }
   }
 
@@ -121,7 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final data = _items.map((item) => item.toJson()).toList();
       await prefs.setString('saved_scanned_items_v1', jsonEncode(data));
     } catch (e) {
-      debugPrint('Error saving items to storage: $e');
+      AppLog.d('Error saving items to storage: $e');
     }
   }
 
@@ -330,7 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final savedFile = await sourceFile.copy(targetPath);
       return savedFile;
     } catch (e) {
-      debugPrint('Error copying file to permanent storage: $e');
+      AppLog.d('Error copying file to permanent storage: $e');
       return sourceFile;
     }
   }
@@ -429,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _items.insert(0, item);
           }
         } catch (e) {
-          debugPrint('Error scanning entity ${entity.id}: $e');
+          AppLog.d('Error scanning entity ${entity.id}: $e');
         }
 
         _processedCount++;
@@ -539,7 +540,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
           _items.insert(0, item);
         } catch (e) {
-          debugPrint('Error scanning file ${file.path}: $e');
+          AppLog.d('Error scanning file ${file.path}: $e');
         }
 
         _processedCount++;
@@ -782,15 +783,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 14),
                 ElevatedButton.icon(
-                  onPressed: () {
+                  onPressed: () async {
                     Navigator.of(ctx).pop();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
-                    );
+                    await MonetizationService.openProPurchase(context);
                   },
                   icon: const Icon(Icons.workspace_premium_rounded, color: Colors.white, size: 19),
                   label: const Text(
-                    'Pembayaran & Beli PRO (QRIS)',
+                    'Beli PRO (Sekali Bayar)',
                     style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
                   ),
                   style: ElevatedButton.styleFrom(
@@ -800,6 +799,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (_items.isNotEmpty) ...[
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      _clearAll();
+                    },
+                    icon: Icon(Icons.delete_sweep_outlined, color: AppTheme.inkColor(isDark), size: 18),
+                    label: Text(
+                      'Bersihkan Semua Daftar Foto',
+                      style: TextStyle(color: AppTheme.inkColor(isDark), fontWeight: FontWeight.w600),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.borderColor(isDark)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 OutlinedButton.icon(
                   onPressed: () async {
                     final navigator = Navigator.of(context);
@@ -1182,6 +1200,27 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
+    // Potong kuota di server SEBELUM foto dihapus (server-authoritative).
+    // Kalau gagal (offline / kuota habis), tidak ada foto yang dihapus.
+    String? quotaRef;
+    var quotaConsumed = 0;
+    if (!isPro) {
+      quotaRef = 'del_${DateTime.now().microsecondsSinceEpoch}';
+      quotaConsumed = selected.length;
+      final quotaOk = await QuotaService.consumeQuota(quotaConsumed, refId: quotaRef);
+      if (!quotaOk) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(QuotaService.lastError ?? 'Kuota tidak cukup.'),
+            backgroundColor: AppTheme.dangerRed,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
+
     // Hapus foto asli dari Galeri Sistem HP (MediaStore)
     final systemAssetIds = selected
         .map((i) => i.assetId)
@@ -1194,7 +1233,7 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         successfullyDeletedAssetIds = await PhotoManager.editor.deleteWithIds(systemAssetIds);
       } catch (e) {
-        debugPrint('Error deleting from system gallery: $e');
+        AppLog.d('Error deleting from system gallery: $e');
       }
     }
 
@@ -1207,6 +1246,10 @@ class _HomeScreenState extends State<HomeScreen> {
             behavior: SnackBarBehavior.floating,
           ),
         );
+      }
+      // Penghapusan tidak terjadi → kembalikan kuota yang sudah terpotong.
+      if (quotaRef != null && quotaConsumed > 0) {
+        await QuotaService.refundQuota(quotaRef, quotaConsumed);
       }
       return;
     }
@@ -1225,14 +1268,11 @@ class _HomeScreenState extends State<HomeScreen> {
           item.file.deleteSync();
         }
       } catch (e) {
-        debugPrint('Error deleting file: $e');
+        AppLog.d('Error deleting file: $e');
       }
     }
 
     if (mounted) {
-      if (!isPro && itemsToRemove.isNotEmpty) {
-        await QuotaService.consumeQuota(itemsToRemove.length);
-      }
       final remaining = await QuotaService.getRemainingQuota();
       setState(() {
         final removeIds = itemsToRemove.map((i) => i.id).toSet();
@@ -1294,6 +1334,26 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
+    // Potong kuota di server SEBELUM foto dihapus (server-authoritative).
+    String? quotaRef;
+    var quotaConsumed = 0;
+    if (!isPro) {
+      quotaRef = 'del_${DateTime.now().microsecondsSinceEpoch}';
+      quotaConsumed = itemCount;
+      final quotaOk = await QuotaService.consumeQuota(quotaConsumed, refId: quotaRef);
+      if (!quotaOk) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(QuotaService.lastError ?? 'Kuota tidak cukup.'),
+            backgroundColor: AppTheme.dangerRed,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
+
     final systemAssetIds = _items
         .map((i) => i.assetId)
         .whereType<String>()
@@ -1305,7 +1365,7 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         successfullyDeletedAssetIds = await PhotoManager.editor.deleteWithIds(systemAssetIds);
       } catch (e) {
-        debugPrint('Error deleting from system gallery: $e');
+        AppLog.d('Error deleting from system gallery: $e');
       }
     }
 
@@ -1317,6 +1377,10 @@ class _HomeScreenState extends State<HomeScreen> {
             behavior: SnackBarBehavior.floating,
           ),
         );
+      }
+      // Penghapusan tidak terjadi → kembalikan kuota yang sudah terpotong.
+      if (quotaRef != null && quotaConsumed > 0) {
+        await QuotaService.refundQuota(quotaRef, quotaConsumed);
       }
       return;
     }
@@ -1335,14 +1399,11 @@ class _HomeScreenState extends State<HomeScreen> {
           item.file.deleteSync();
         }
       } catch (e) {
-        debugPrint('Error deleting file: $e');
+        AppLog.d('Error deleting file: $e');
       }
     }
 
     if (mounted) {
-      if (!isPro && itemsToRemove.isNotEmpty) {
-        await QuotaService.consumeQuota(itemsToRemove.length);
-      }
       final remaining = await QuotaService.getRemainingQuota();
       setState(() {
         final removeIds = itemsToRemove.map((i) => i.id).toSet();
@@ -1372,25 +1433,18 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
-        title: Row(
+        title: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: AppTheme.qrisGreenDark,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.qr_code_scanner_rounded, color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 8),
-            const Flexible(
+            AppLogo(size: 32),
+            SizedBox(width: 10),
+            Flexible(
               child: Text(
-                'QRIS Detector',
+                'Qristal',
                 style: TextStyle(
-                  fontSize: 17,
+                  fontSize: 18,
                   fontWeight: FontWeight.w800,
-                  letterSpacing: -0.3,
+                  letterSpacing: -0.4,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1399,123 +1453,27 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
-          // Kuota Hapus Chip Minimalis (Bisa diklik untuk info / tambah kuota lewat iklan)
-          FutureBuilder<int>(
-            future: QuotaService.getRemainingQuota(),
-            builder: (context, quotaSnap) {
-              final quota = quotaSnap.data ?? 5;
-              return Container(
-                margin: const EdgeInsets.only(right: 6),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () async {
-                    await QuotaService.showQuotaManagementDialog(context);
-                    setState(() {});
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: AppTheme.subtleBg(isDark),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppTheme.borderColor(isDark)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.confirmation_number_outlined, color: AppTheme.primary, size: 13),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$quota',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.inkColor(isDark),
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _showAccountModal,
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
                 ),
-              );
-            },
-          ),
-          // PRO Badge & Modal Upgrade Trigger Minimalis
-          FutureBuilder<bool>(
-            future: MonetizationService.isProUser(),
-            builder: (context, snapshot) {
-              final isPro = snapshot.data ?? false;
-              return Container(
-                margin: const EdgeInsets.only(right: 4),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () async {
-                    await MonetizationService.showProUpgradeModal(context);
-                    setState(() {});
-                  },
-                  onLongPress: isPro
-                      ? () async {
-                          // Secret Dev Reset PRO Status
-                          await MonetizationService.setProUser(false);
-                          setState(() {});
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('[Dev Mode] Reset status ke FREE User.')),
-                            );
-                          }
-                        }
-                      : null,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: isPro ? AppTheme.qrAmber.withOpacity(0.16) : AppTheme.subtleBg(isDark),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: isPro ? AppTheme.qrAmber : AppTheme.borderColor(isDark),
-                        width: 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isPro ? Icons.star_rounded : Icons.workspace_premium_outlined,
-                          color: isPro ? AppTheme.qrAmber : AppTheme.mutedColor(isDark),
-                          size: 13,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'PRO',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.3,
-                            color: isPro ? AppTheme.qrAmber : AppTheme.mutedColor(isDark),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                child: Icon(
+                  Icons.person_outline_rounded,
+                  size: 20,
+                  color: AppTheme.inkColor(isDark),
                 ),
-              );
-            },
-          ),
-          if (_items.isNotEmpty)
-            IconButton(
-              tooltip: 'Bersihkan Daftar',
-              icon: const Icon(Icons.delete_sweep_outlined, size: 20),
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              padding: const EdgeInsets.all(4),
-              onPressed: _clearAll,
+              ),
             ),
-          IconButton(
-            tooltip: 'Akun & Profil',
-            icon: const Icon(Icons.account_circle_outlined, size: 22),
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            onPressed: _showAccountModal,
           ),
-          const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(
@@ -2083,16 +2041,19 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: AppTheme.subtleBg(isDark),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: iconColor.withOpacity(0.4)),
+              if (_items.isEmpty)
+                const AppLogo(size: 56)
+              else
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: AppTheme.subtleBg(isDark),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: iconColor.withOpacity(0.4)),
+                  ),
+                  child: Icon(icon, size: 28, color: iconColor),
                 ),
-                child: Icon(icon, size: 28, color: iconColor),
-              ),
               const SizedBox(height: 18),
               Text(
                 _items.isEmpty ? 'Pindai Galeri Perangkat' : 'Tidak Ada Hasil Filter',

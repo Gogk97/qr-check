@@ -1,5 +1,5 @@
-import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
+import '../utils/app_log.dart';
 
 /// [Deprecated] Service legacy Google Apps Script / Google Sheets.
 ///
@@ -16,7 +16,7 @@ class CloudSyncService {
     int? remainingQuota,
     bool? isPro,
   }) async {
-    debugPrint('ℹ️ CloudSyncService is deprecated. User data is synced via Supabase Auth & DB.');
+    AppLog.d('ℹ️ CloudSyncService is deprecated. User data is synced via Supabase Auth & DB.');
     return true;
   }
 
@@ -25,7 +25,7 @@ class CloudSyncService {
     required bool isGoogle,
     required int newQuota,
   }) async {
-    debugPrint('ℹ️ CloudSyncService is deprecated. Quota is managed via Supabase RPC.');
+    AppLog.d('ℹ️ CloudSyncService is deprecated. Quota is managed via Supabase RPC.');
     return true;
   }
 }
