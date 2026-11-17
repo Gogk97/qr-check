@@ -3,12 +3,16 @@ import 'package:flutter/services.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
+import 'services/ad_service.dart';
 import 'services/supabase_service.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseService.initialize();
+  // AdMob diinisialisasi tanpa di-await: jangan menunda startup aplikasi.
+  // Preload rewarded & interstitial berjalan di latar belakang.
+  AdService.initialize();
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

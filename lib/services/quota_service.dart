@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
+import 'ad_service.dart';
 import 'auth_service.dart';
 import 'device_service.dart';
 import 'monetization_service.dart';
@@ -249,21 +250,29 @@ class QuotaService {
     await prefs.setInt(_quotaKey, quota);
   }
 
-  /// Menampilkan simulasi Iklan Rewarded Video untuk mendapatkan +1 Kuota
+  /// Menampilkan Rewarded AdMob nyata untuk mendapatkan +1 Kuota Hapus.
+  /// Reward hanya diberikan bila Google mengonfirmasi iklan selesai ditonton.
   static Future<bool> watchRewardedAdForQuota(BuildContext context) async {
     if (!context.mounted) return false;
 
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return const _RewardedAdDialog(
-          title: 'Iklan Video Rewarded',
-          description: 'Tonton sponsor selama beberapa detik untuk mendapatkan +1 Kuota Hapus...',
-          durationSeconds: 3,
+    final userId = SupabaseService.isInitialized
+        ? SupabaseService.client.auth.currentUser?.id
+        : null;
+    final earned = await AdService.showRewarded(userId: userId);
+
+    if (!earned) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Iklan belum selesai atau belum tersedia. Kuota belum ditambahkan.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
         );
-      },
-    );
+      }
+      return false;
+    }
 
     final newQuota = await addQuota(1);
 
@@ -598,96 +607,6 @@ class QuotaService {
           ],
         );
       },
-    );
-  }
-}
-
-class _RewardedAdDialog extends StatefulWidget {
-  final String title;
-  final String description;
-  final int durationSeconds;
-
-  const _RewardedAdDialog({
-    required this.title,
-    required this.description,
-    required this.durationSeconds,
-  });
-
-  @override
-  State<_RewardedAdDialog> createState() => _RewardedAdDialogState();
-}
-
-class _RewardedAdDialogState extends State<_RewardedAdDialog> {
-  late int _secondsLeft;
-
-  @override
-  void initState() {
-    super.initState();
-    _secondsLeft = widget.durationSeconds;
-    _startCountdown();
-  }
-
-  void _startCountdown() async {
-    while (_secondsLeft > 0) {
-      await Future.delayed(const Duration(seconds: 1));
-      if (mounted) {
-        setState(() {
-          _secondsLeft--;
-        });
-      }
-    }
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.primary.withOpacity(0.12),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.ondemand_video_rounded, color: AppTheme.primary, size: 40),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              widget.title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.description,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  'Hadiah diberikan dalam $_secondsLeft detik...',
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

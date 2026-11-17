@@ -10,7 +10,7 @@ import '../utils/app_log.dart';
 const String kProLifetimeProductId = 'pro_lifetime';
 
 /// Harga fallback jika Play Billing belum siap (mis. offline / bukan Android).
-const String kProFallbackPrice = 'Rp 15.000';
+const String kProFallbackPrice = 'Rp 5.000';
 
 enum PlayPurchaseStatus {
   purchased,

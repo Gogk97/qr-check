@@ -37,6 +37,11 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // AdMob App ID. Default = test App ID resmi Google (aman untuk dev).
+        // Rilis produksi: flutter build appbundle -PadmobAppId=ca-app-pub-XXXX~YYYY
+        manifestPlaceholders["admobAppId"] =
+            (project.findProperty("admobAppId") ?: "ca-app-pub-3940256099942544~3347511713").toString()
     }
 
     signingConfigs {

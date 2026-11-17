@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/qris_payment_screen.dart';
 import '../theme/app_theme.dart';
+import 'ad_service.dart';
 import 'play_billing_service.dart';
 import 'supabase_service.dart';
 
@@ -68,24 +69,15 @@ class MonetizationService {
     }
   }
 
-  /// Tampilkan Dialog Iklan Interstitial Singkat (Dev / Production Ready)
+  /// Tampilkan interstitial AdMob.
+  /// - Tidak pernah untuk PRO (PRO = bebas iklan).
+  /// - Dibatasi frekuensi (min. 2 menit & setiap 3 aksi) agar tidak melanggar
+  ///   kebijakan Play soal iklan mengganggu.
   static Future<void> showInterstitialAd(BuildContext context) async {
     final isPro = await isProUser();
     if (isPro) return; // PRO user bebas iklan!
-
     if (!context.mounted) return;
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return const _SimulatedAdDialog(
-          title: 'Iklan Sponsor Singkat',
-          description: 'Foto sedang dihapus... Menutup iklan dalam beberapa detik.',
-          durationSeconds: 2,
-        );
-      },
-    );
+    await AdService.maybeShowInterstitial(isPro: isPro);
   }
 
   /// Tampilkan Dialog Pilihan Hapus Massal (> 3 Item)
@@ -219,18 +211,25 @@ class MonetizationService {
 
     if (result == 'watch_ad') {
       if (!context.mounted) return false;
-      // Simulasikan Rewarded Video Ad
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) {
-          return const _SimulatedAdDialog(
-            title: 'Iklan Video Rewarded',
-            description: 'Sedang memutar video sponsor... Mengkonfirmasi Hapus Massal.',
-            durationSeconds: 3,
+      // Rewarded AdMob: hapus massal hanya diizinkan bila Google mengonfirmasi
+      // reward benar-benar didapat (iklan ditonton sampai selesai).
+      final userId = SupabaseService.isInitialized
+          ? SupabaseService.client.auth.currentUser?.id
+          : null;
+      final earned = await AdService.showRewarded(userId: userId);
+      if (!earned) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Iklan belum selesai atau belum tersedia. Coba lagi sebentar lagi.',
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
           );
-        },
-      );
+        }
+        return false;
+      }
       return true;
     } else if (result == 'buy_pro') {
       if (!context.mounted) return false;
@@ -682,96 +681,6 @@ class _ProUpgradeSheetState extends State<ProUpgradeSheet> {
             ),
           ],
         ],
-      ),
-    );
-  }
-}
-
-class _SimulatedAdDialog extends StatefulWidget {
-  final String title;
-  final String description;
-  final int durationSeconds;
-
-  const _SimulatedAdDialog({
-    required this.title,
-    required this.description,
-    required this.durationSeconds,
-  });
-
-  @override
-  State<_SimulatedAdDialog> createState() => _SimulatedAdDialogState();
-}
-
-class _SimulatedAdDialogState extends State<_SimulatedAdDialog> {
-  late int _secondsLeft;
-
-  @override
-  void initState() {
-    super.initState();
-    _secondsLeft = widget.durationSeconds;
-    _startCountdown();
-  }
-
-  void _startCountdown() async {
-    while (_secondsLeft > 0) {
-      await Future.delayed(const Duration(seconds: 1));
-      if (mounted) {
-        setState(() {
-          _secondsLeft--;
-        });
-      }
-    }
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.primary.withOpacity(0.12),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.ondemand_video_rounded, color: AppTheme.primary, size: 40),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              widget.title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.description,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  'Menutup otomatis dalam $_secondsLeft dtk...',
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.primary),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }

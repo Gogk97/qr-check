@@ -8,12 +8,14 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/scanned_item.dart';
+import '../services/ad_service.dart';
 import '../services/auth_service.dart';
 import '../services/image_scanner_service.dart';
 import '../services/monetization_service.dart';
 import '../services/notification_service.dart';
 import '../services/quota_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/ad_banner.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/scanned_item_card.dart';
 import '../widgets/stats_card.dart';
@@ -1279,6 +1281,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _items.removeWhere((i) => removeIds.contains(i.id));
       });
       await _saveItemsToStorage();
+      // Gating interstitial AdMob: hanya dihitung dari aksi hapus yang berhasil.
+      AdService.noteUserAction();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1410,6 +1414,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _items.removeWhere((i) => removeIds.contains(i.id));
       });
       await _saveItemsToStorage();
+      // Gating interstitial AdMob: hanya dihitung dari aksi hapus yang berhasil.
+      AdService.noteUserAction();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1919,7 +1925,12 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: Container(
+      // Banner AdMob: tidak tampil untuk PRO, dan tidak memakan ruang bila gagal dimuat.
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const AdBanner(),
+          Container(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         decoration: BoxDecoration(
           color: AppTheme.cardColor(isDark),
@@ -2005,6 +2016,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+          ),
+        ],
       ),
     );
   }
