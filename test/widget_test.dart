@@ -14,7 +14,7 @@ void main() {
 
   testWidgets('App smoke test for HomeScreen', (WidgetTester tester) async {
     await tester.pumpWidget(const QRCheckApp(home: HomeScreen()));
-    expect(find.text('QRIS Detector'), findsOneWidget);
+    expect(find.text('Qristal'), findsOneWidget);
     expect(find.text('Pindai Semua Galeri (AI)'), findsOneWidget);
   });
 
@@ -31,39 +31,35 @@ void main() {
     expect(find.text('Kirim Konfirmasi Pembayaran'), findsOneWidget);
   });
 
-  test('QuotaService correctly initializes and manages quota', () async {
-    // 1. Initial Google Quota = 10
+  test('QuotaService menolak pemotongan kuota tanpa server (anti-bypass offline)', () async {
+    // 1. Kuota awal Google = 10 (cache lokal untuk tampilan)
     final googleQuota = await QuotaService.initQuotaForLogin(isGoogle: true, userId: 'test_google_1');
     expect(googleQuota, equals(10));
     expect(await QuotaService.getRemainingQuota(), equals(10));
 
-    // 2. Consume 3 quota
+    // 2. Tanpa sesi Supabase, pemotongan kuota HARUS ditolak.
     final consumed = await QuotaService.consumeQuota(3);
-    expect(consumed, isTrue);
-    expect(await QuotaService.getRemainingQuota(), equals(7));
+    expect(consumed, isFalse);
+    expect(QuotaService.lastError, isNotNull);
+    expect(await QuotaService.getRemainingQuota(), equals(10));
 
-    // 3. Add 1 quota via watching ad
+    // 3. Reward iklan juga tidak boleh menambah kuota secara lokal.
     final added = await QuotaService.addQuota(1);
-    expect(added, equals(8));
-    expect(await QuotaService.getRemainingQuota(), equals(8));
+    expect(added, equals(10));
 
-    // 4. Initial Guest Quota for new user = 5
+    // 4. Kuota awal Guest = 5
     final guestQuota = await QuotaService.initQuotaForLogin(isGoogle: false, userId: 'test_guest_1');
     expect(guestQuota, equals(5));
     expect(await QuotaService.getRemainingQuota(), equals(5));
 
-    // 5. Guest consumes 2 quotas -> remaining 3
-    await QuotaService.consumeQuota(2);
-    expect(await QuotaService.getRemainingQuota(), equals(3));
-
-    // 6. Guest logs in again with same userId -> MUST restore 3, NOT reset to 5
+    // 5. Login ulang dengan userId yang sama tidak me-reset kuota
     final restoredGuestQuota = await QuotaService.initQuotaForLogin(isGoogle: false, userId: 'test_guest_1');
-    expect(restoredGuestQuota, equals(3));
-    expect(await QuotaService.getRemainingQuota(), equals(3));
+    expect(restoredGuestQuota, equals(5));
   });
 
   test('SupabaseConfig has valid project URL and anon key', () {
     expect(SupabaseConfig.projectUrl, contains('https://oljiqzttttxjrbwtfzze.supabase.co'));
     expect(SupabaseConfig.anonKey, isNotEmpty);
+    expect(SupabaseConfig.googleWebClientId, isNotEmpty);
   });
 }

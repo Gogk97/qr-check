@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../screens/qris_payment_screen.dart';
 import '../theme/app_theme.dart';
+import 'ad_service.dart';
 import 'auth_service.dart';
+import 'device_service.dart';
 import 'monetization_service.dart';
 import 'supabase_service.dart';
+import '../utils/app_log.dart';
 
 /// Layanan manajemen kuota penghapusan foto untuk pengguna QRIS Detector.
 ///
@@ -14,7 +16,7 @@ class QuotaService {
   static const String _quotaKey = 'user_delete_quota_v1';
   static const String _initializedUsersKey = 'initialized_quota_users_v1';
 
-  /// Inisialisasi kuota saat login akun (sinkronisasi dari server Supabase)
+  /// Inisialisasi kuota saat login akun (sinkronisasi dari server Supabase dengan perlindungan anti-exploit)
   static Future<int> initQuotaForLogin({
     required bool isGoogle,
     required String userId,
@@ -23,30 +25,50 @@ class QuotaService {
     await prefs.setString('last_active_user_id_v1', userId);
     final userQuotaKey = 'user_quota_v1_$userId';
 
-    // 1. Coba ambil data resmi dari Supabase profiles
+    // 1. Klaim kuota selamat datang terikat device (Anti Multi-Account / Reinstall Abuse)
     try {
       if (SupabaseService.isAuthenticated) {
-        final profile = await SupabaseService.client
-            .from('profiles')
-            .select('remaining_quota, is_pro')
-            .eq('id', userId)
-            .maybeSingle();
+        final deviceDetails = await DeviceService.getDeviceDetails();
+        final deviceId = deviceDetails['device_id'] ?? userId;
 
-        if (profile != null) {
-          final serverQuota = profile['remaining_quota'] as int?;
-          final serverIsPro = profile['is_pro'] as bool? ?? false;
+        final res = await SupabaseService.client.rpc('claim_device_welcome_quota', params: {
+          'p_device_id': deviceId,
+          'p_device_brand': deviceDetails['device_brand'],
+          'p_device_model': deviceDetails['device_model'],
+          'p_os_version': deviceDetails['os_version'],
+        });
+
+        if (res is Map && res['success'] == true) {
+          final serverQuota = (res['remaining_quota'] as num?)?.toInt();
+          final serverIsPro = res['is_pro'] as bool? ?? false;
           if (serverIsPro) {
             await MonetizationService.setProUser(true, userId: userId);
           }
           if (serverQuota != null) {
             await prefs.setInt(_quotaKey, serverQuota);
             await prefs.setInt(userQuotaKey, serverQuota);
+            if (res['bonus_granted'] == false && res['message'] != null) {
+              AppLog.d('⚠️ Anti-Abuse notice: ${res['message']}');
+            }
             return serverQuota;
           }
         }
+
+        // Server menolak klaim (DEVICE_MISMATCH / DEVICE_LIMIT_REACHED /
+        // RATE_LIMITED). Jangan mengarang kuota lokal: pakai nilai server.
+        if (res is Map && res['remaining_quota'] != null) {
+          final serverQuota = (res['remaining_quota'] as num).toInt();
+          await prefs.setInt(_quotaKey, serverQuota);
+          await prefs.setInt(userQuotaKey, serverQuota);
+          if (res['is_pro'] == true) {
+            await MonetizationService.setProUser(true, userId: userId);
+          }
+          AppLog.d('⚠️ Klaim kuota ditolak server: ${res['error']}');
+          return serverQuota;
+        }
       }
     } catch (e) {
-      debugPrint('⚠️ Supabase sync profile quota error: $e');
+      AppLog.d('⚠️ Supabase claim_device_welcome_quota error: $e');
     }
 
     final initializedList = prefs.getStringList(_initializedUsersKey) ?? [];
@@ -98,97 +120,128 @@ class QuotaService {
     return defaultQuota;
   }
 
-  /// Memeriksa apakah kuota mencukupi untuk menghapus sejumlah [needed] foto
+  /// Pesan error terakhir dari operasi kuota (untuk ditampilkan di UI).
+  static String? _lastQuotaError;
+  static String? get lastError => _lastQuotaError;
+
+  /// Memeriksa apakah kuota mencukupi untuk menghapus sejumlah [needed] foto.
+  /// Catatan: ini hanya untuk gating UI — keputusan final tetap di server
+  /// (`consume_quota`).
   static Future<bool> hasEnoughQuota(int needed) async {
     final isPro = await MonetizationService.isProUser();
-    if (isPro) return true; // PRO User = Unlimited
+    if (isPro) return true;
     final current = await getRemainingQuota();
     return current >= needed;
   }
 
-  /// Mengurangi kuota sebesar [count] secara atomik via Supabase RPC
-  static Future<bool> consumeQuota(int count, {String? userId}) async {
+  /// Mengurangi kuota secara atomik **di server**.
+  ///
+  /// Tidak ada fallback lokal: kalau server tidak bisa dihubungi, operasi
+  /// ditolak supaya kuota tidak bisa dipakai gratis saat offline.
+  static Future<bool> consumeQuota(
+    int count, {
+    String? userId,
+    String? refId,
+  }) async {
+    if (count <= 0) return true;
+    _lastQuotaError = null;
+
+    if (!SupabaseService.isAuthenticated) {
+      _lastQuotaError = 'Butuh koneksi internet untuk memotong kuota.';
+      return false;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     final currentUserId = userId ?? prefs.getString('last_active_user_id_v1');
-    final isPro = await MonetizationService.isProUser(userId: currentUserId);
-    if (isPro) return true; // PRO User tidak mengurangi kuota
+    final ref = refId ?? 'del_${DateTime.now().microsecondsSinceEpoch}';
 
-    // 1. Mutasi atomik di server Supabase
     try {
-      if (SupabaseService.isAuthenticated) {
-        final res = await SupabaseService.client.rpc('consume_quota', params: {
-          'p_amount': count,
-          'p_ref_id': 'del_${DateTime.now().millisecondsSinceEpoch}',
-        });
+      final res = await SupabaseService.client.rpc('consume_quota', params: {
+        'p_amount': count,
+        'p_ref_id': ref,
+      });
 
-        if (res is Map && res['success'] == true) {
-          final remaining = (res['remaining_quota'] as num?)?.toInt();
-          if (remaining != null) {
-            await prefs.setInt(_quotaKey, remaining);
-            if (currentUserId != null) {
-              await prefs.setInt('user_quota_v1_$currentUserId', remaining);
-            }
+      if (res is Map && res['success'] == true) {
+        final remaining = (res['remaining_quota'] as num?)?.toInt();
+        if (remaining != null) {
+          await prefs.setInt(_quotaKey, remaining);
+          if (currentUserId != null) {
+            await prefs.setInt('user_quota_v1_$currentUserId', remaining);
           }
-          return true;
-        } else if (res is Map && res['code'] == 'INSUFFICIENT_QUOTA') {
-          return false;
         }
+        return true;
       }
+
+      final code = res is Map ? res['code'] : null;
+      _lastQuotaError = switch (code) {
+        'INSUFFICIENT_QUOTA' => 'Kuota tidak cukup. Tonton iklan atau upgrade PRO.',
+        'RATE_LIMITED' => 'Terlalu banyak permintaan. Coba lagi sebentar.',
+        _ => 'Kuota gagal dipotong (${code ?? 'unknown'}).',
+      };
+      return false;
     } catch (e) {
-      debugPrint('⚠️ Supabase consume_quota error, fallback local: $e');
+      AppLog.d('⚠️ consume_quota gagal: $e');
+      _lastQuotaError = 'Tidak dapat menghubungi server. Coba lagi saat online.';
+      return false;
     }
-
-    // 2. Fallback offline
-    final current = await getRemainingQuota();
-    if (current < count) return false;
-
-    final newQuota = current - count;
-    await prefs.setInt(_quotaKey, newQuota);
-
-    if (currentUserId != null && currentUserId.isNotEmpty) {
-      await prefs.setInt('user_quota_v1_$currentUserId', newQuota);
-    }
-
-    return true;
   }
 
-  /// Menambah kuota sebesar [amount] (misal: +1 dari menonton video sponsor) via Supabase RPC
+  /// Kembalikan kuota yang sudah terpotong bila penghapusan dibatalkan.
+  /// Idempoten di server: satu [refId] hanya bisa di-refund sekali.
+  static Future<void> refundQuota(String refId, int amount) async {
+    if (amount <= 0 || !SupabaseService.isAuthenticated) return;
+    try {
+      await SupabaseService.client.rpc('refund_quota', params: {
+        'p_ref_id': refId,
+        'p_amount': amount,
+      });
+    } catch (e) {
+      AppLog.d('⚠️ refund_quota gagal: $e');
+    }
+  }
+
+  /// Menambah kuota lewat server (RPC `claim_ad_reward`).
+  /// Tidak ada penambahan lokal: kalau server menolak/gagal, kuota tidak berubah.
   static Future<int> addQuota(int amount, {String? userId}) async {
     final prefs = await SharedPreferences.getInstance();
     final currentUserId = userId ?? prefs.getString('last_active_user_id_v1');
+    final current = await getRemainingQuota();
+    _lastQuotaError = null;
 
-    // 1. Eksekusi di server Supabase
+    if (amount <= 0) return current;
+    if (!SupabaseService.isAuthenticated) {
+      _lastQuotaError = 'Butuh koneksi internet untuk menambah kuota.';
+      return current;
+    }
+
     try {
-      if (SupabaseService.isAuthenticated) {
-        final res = await SupabaseService.client.rpc('claim_ad_reward', params: {
-          'p_ref_id': 'ad_${DateTime.now().millisecondsSinceEpoch}',
-        });
+      final res = await SupabaseService.client.rpc('claim_ad_reward', params: {
+        'p_ref_id': 'ad_${DateTime.now().microsecondsSinceEpoch}',
+      });
 
-        if (res is Map && res['success'] == true) {
-          final remaining = (res['remaining_quota'] as num?)?.toInt();
-          if (remaining != null) {
-            await prefs.setInt(_quotaKey, remaining);
-            if (currentUserId != null) {
-              await prefs.setInt('user_quota_v1_$currentUserId', remaining);
-            }
-            return remaining;
+      if (res is Map && res['success'] == true) {
+        final remaining = (res['remaining_quota'] as num?)?.toInt();
+        if (remaining != null) {
+          await prefs.setInt(_quotaKey, remaining);
+          if (currentUserId != null) {
+            await prefs.setInt('user_quota_v1_$currentUserId', remaining);
           }
+          return remaining;
         }
       }
+
+      final code = res is Map ? res['code'] : null;
+      _lastQuotaError = switch (code) {
+        'DAILY_LIMIT_REACHED' => 'Batas reward iklan harian tercapai.',
+        'RATE_LIMITED' => 'Terlalu cepat. Coba lagi beberapa saat.',
+        _ => 'Reward iklan gagal diklaim (${code ?? 'unknown'}).',
+      };
     } catch (e) {
-      debugPrint('⚠️ Supabase claim_ad_reward error, fallback local: $e');
+      AppLog.d('⚠️ claim_ad_reward gagal: $e');
+      _lastQuotaError = 'Tidak dapat menghubungi server. Coba lagi saat online.';
     }
 
-    // 2. Fallback offline
-    final current = await getRemainingQuota();
-    final newQuota = current + amount;
-    await prefs.setInt(_quotaKey, newQuota);
-
-    if (currentUserId != null && currentUserId.isNotEmpty) {
-      await prefs.setInt('user_quota_v1_$currentUserId', newQuota);
-    }
-
-    return newQuota;
+    return current;
   }
 
   /// Reset Kuota (untuk kebutuhan Developer / Testing)
@@ -197,21 +250,29 @@ class QuotaService {
     await prefs.setInt(_quotaKey, quota);
   }
 
-  /// Menampilkan simulasi Iklan Rewarded Video untuk mendapatkan +1 Kuota
+  /// Menampilkan Rewarded AdMob nyata untuk mendapatkan +1 Kuota Hapus.
+  /// Reward hanya diberikan bila Google mengonfirmasi iklan selesai ditonton.
   static Future<bool> watchRewardedAdForQuota(BuildContext context) async {
     if (!context.mounted) return false;
 
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return const _RewardedAdDialog(
-          title: 'Iklan Video Rewarded',
-          description: 'Tonton sponsor selama beberapa detik untuk mendapatkan +1 Kuota Hapus...',
-          durationSeconds: 3,
+    final userId = SupabaseService.isInitialized
+        ? SupabaseService.client.auth.currentUser?.id
+        : null;
+    final earned = await AdService.showRewarded(userId: userId);
+
+    if (!earned) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Iklan belum selesai atau belum tersedia. Kuota belum ditambahkan.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
         );
-      },
-    );
+      }
+      return false;
+    }
 
     final newQuota = await addQuota(1);
 
@@ -250,23 +311,28 @@ class QuotaService {
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: AppTheme.cardColor(isDark),
           title: Row(
             children: [
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
+                  color: AppTheme.qrAmber.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.hourglass_empty_rounded, color: Colors.orange, size: 26),
+                child: const Icon(Icons.hourglass_empty_rounded, color: AppTheme.qrAmber, size: 22),
               ),
-              const SizedBox(width: 12),
-              const Expanded(
+              const SizedBox(width: 10),
+              Expanded(
                 child: Text(
                   'Kuota Hapus Tidak Cukup',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                    color: AppTheme.inkColor(isDark),
+                  ),
                 ),
               ),
             ],
@@ -278,9 +344,9 @@ class QuotaService {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -288,88 +354,103 @@ class QuotaService {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Dibutuhkan', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                        Text('Dibutuhkan', style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark))),
                         Text(
                           '$needed Foto',
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.red),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.dangerRed,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
                         ),
                       ],
                     ),
-                    Container(height: 28, width: 1, color: Colors.grey.withOpacity(0.3)),
+                    Container(height: 28, width: 1, color: AppTheme.borderColor(isDark)),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        const Text('Sisa Kuota Anda', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                        Text('Sisa Kuota Anda', style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark))),
                         Text(
                           '$current Foto',
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.orange),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.qrAmber,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
                         ),
                       ],
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'Pilih opsi di bawah untuk menambah kuota atau hapus tanpa batas:',
-                style: TextStyle(fontSize: 12, height: 1.3),
-              ),
               const SizedBox(height: 14),
+              Text(
+                'Pilih opsi di bawah untuk menambah kuota atau hapus tanpa batas:',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.mutedColor(isDark),
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 12),
 
               // Opsi 1: Tonton Iklan (+1 Kuota)
               Container(
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+                  color: AppTheme.cardColor(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
                 ),
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  leading: const CircleAvatar(
-                    backgroundColor: AppTheme.primary,
-                    radius: 20,
-                    child: Icon(Icons.ondemand_video_rounded, color: Colors.white, size: 22),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.ondemand_video_rounded, color: AppTheme.primary, size: 20),
                   ),
-                  title: const Text(
+                  title: Text(
                     'Tonton Iklan (+1 Kuota)',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.inkColor(isDark)),
                   ),
-                  subtitle: const Text(
+                  subtitle: Text(
                     'Tonton video sponsor singkat 3 detik untuk +1 kuota.',
-                    style: TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark)),
                   ),
                   onTap: () => Navigator.of(ctx).pop('watch_ad'),
                 ),
               ),
 
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
 
               // Opsi 2: Beli PRO (Unlimited)
               Container(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      const Color(0xFFD97706).withOpacity(0.12),
-                      const Color(0xFFF59E0B).withOpacity(0.12),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                  color: AppTheme.cardColor(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.qrAmber.withOpacity(0.4)),
                 ),
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFFD97706),
-                    radius: 20,
-                    child: Icon(Icons.workspace_premium_rounded, color: Colors.white, size: 22),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppTheme.qrAmber.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.workspace_premium_rounded, color: AppTheme.qrAmber, size: 20),
                   ),
                   title: const Text(
-                    'Upgrade ke PRO (Rp 15.000)',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: Color(0xFFD97706)),
+                    'Upgrade ke PRO (Lifetime)',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.qrAmber),
                   ),
-                  subtitle: const Text(
+                  subtitle: Text(
                     'Hapus tanpa batas selamanya & 100% bebas iklan!',
-                    style: TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark)),
                   ),
                   onTap: () => Navigator.of(ctx).pop('buy_pro'),
                 ),
@@ -379,7 +460,7 @@ class QuotaService {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop('cancel'),
-              child: const Text('Batal'),
+              child: Text('Batal', style: TextStyle(color: AppTheme.mutedColor(isDark), fontWeight: FontWeight.w600)),
             ),
           ],
         );
@@ -391,10 +472,7 @@ class QuotaService {
       return await watchRewardedAdForQuota(context);
     } else if (result == 'buy_pro') {
       if (!context.mounted) return false;
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
-      );
-      return false;
+      return MonetizationService.openProPurchase(context);
     }
 
     return false;
@@ -411,27 +489,32 @@ class QuotaService {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: AppTheme.cardColor(isDark),
           title: Row(
             children: [
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: isPro ? Colors.amber.withOpacity(0.15) : AppTheme.primary.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
+                  color: isPro ? AppTheme.qrAmber.withOpacity(0.15) : AppTheme.primary.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
                   isPro ? Icons.star_rounded : Icons.confirmation_number_rounded,
-                  color: isPro ? Colors.amber : AppTheme.primary,
-                  size: 26,
+                  color: isPro ? AppTheme.qrAmber : AppTheme.primary,
+                  size: 22,
                 ),
               ),
-              const SizedBox(width: 12),
-              const Expanded(
+              const SizedBox(width: 10),
+              Expanded(
                 child: Text(
                   'Kuota Hapus Foto',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                    color: AppTheme.inkColor(isDark),
+                  ),
                 ),
               ),
             ],
@@ -441,12 +524,12 @@ class QuotaService {
             children: [
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-                  borderRadius: BorderRadius.circular(16),
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: isPro ? Colors.amber.withOpacity(0.4) : AppTheme.primary.withOpacity(0.3),
+                    color: isPro ? AppTheme.qrAmber.withOpacity(0.4) : AppTheme.borderColor(isDark),
                   ),
                 ),
                 child: Column(
@@ -454,61 +537,63 @@ class QuotaService {
                     Text(
                       'STATUS SAAT INI',
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 10,
                         fontWeight: FontWeight.w700,
-                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                        letterSpacing: 1.1,
+                        color: AppTheme.mutedColor(isDark),
+                        letterSpacing: 0.8,
                       ),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       isPro ? 'UNLIMITED' : '$remaining Foto',
                       style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w900,
-                        color: isPro ? Colors.amber : AppTheme.primary,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.6,
+                        color: isPro ? AppTheme.qrAmber : AppTheme.inkColor(isDark),
+                        fontFeatures: const [FontFeature.tabularFigures()],
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       isPro
-                          ? '✨ Fitur PRO Aktif: Hapus massal tanpa batas!'
+                          ? 'Fitur PRO Aktif: Hapus massal tanpa batas!'
                           : '1 kuota digunakan untuk setiap 1 foto yang dibersihkan.',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      style: TextStyle(fontSize: 11.5, color: AppTheme.mutedColor(isDark)),
                     ),
                   ],
                 ),
               ),
               if (!isPro) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
                 ElevatedButton.icon(
                   onPressed: () async {
                     Navigator.of(ctx).pop();
                     await watchRewardedAdForQuota(context);
                   },
-                  icon: const Icon(Icons.ondemand_video_rounded, size: 20),
+                  icon: const Icon(Icons.ondemand_video_rounded, size: 18),
                   label: const Text('Nonton Iklan (+1 Kuota Hapus)'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primary,
-                    minimumSize: const Size(double.infinity, 46),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 44),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    elevation: 0,
                   ),
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
-                  onPressed: () {
+                  onPressed: () async {
                     Navigator.of(ctx).pop();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
-                    );
+                    await MonetizationService.openProPurchase(context);
                   },
-                  icon: const Icon(Icons.workspace_premium_rounded, color: Color(0xFFD97706), size: 20),
-                  label: const Text('Beli PRO (Tanpa Batas Kuota)', style: TextStyle(color: Color(0xFFD97706), fontWeight: FontWeight.w800)),
+                  icon: const Icon(Icons.workspace_premium_rounded, color: AppTheme.qrAmber, size: 18),
+                  label: const Text('Beli PRO (Tanpa Batas Kuota)', style: TextStyle(color: AppTheme.qrAmber, fontWeight: FontWeight.w800)),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFD97706)),
-                    minimumSize: const Size(double.infinity, 46),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    side: BorderSide(color: AppTheme.qrAmber.withOpacity(0.5)),
+                    minimumSize: const Size(double.infinity, 44),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
               ],
@@ -517,101 +602,11 @@ class QuotaService {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Tutup'),
+              child: Text('Tutup', style: TextStyle(color: AppTheme.mutedColor(isDark), fontWeight: FontWeight.w600)),
             ),
           ],
         );
       },
-    );
-  }
-}
-
-class _RewardedAdDialog extends StatefulWidget {
-  final String title;
-  final String description;
-  final int durationSeconds;
-
-  const _RewardedAdDialog({
-    required this.title,
-    required this.description,
-    required this.durationSeconds,
-  });
-
-  @override
-  State<_RewardedAdDialog> createState() => _RewardedAdDialogState();
-}
-
-class _RewardedAdDialogState extends State<_RewardedAdDialog> {
-  late int _secondsLeft;
-
-  @override
-  void initState() {
-    super.initState();
-    _secondsLeft = widget.durationSeconds;
-    _startCountdown();
-  }
-
-  void _startCountdown() async {
-    while (_secondsLeft > 0) {
-      await Future.delayed(const Duration(seconds: 1));
-      if (mounted) {
-        setState(() {
-          _secondsLeft--;
-        });
-      }
-    }
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.primary.withOpacity(0.12),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.ondemand_video_rounded, color: AppTheme.primary, size: 40),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              widget.title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.description,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  'Hadiah diberikan dalam $_secondsLeft detik...',
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

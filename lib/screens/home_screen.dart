@@ -8,16 +8,19 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/scanned_item.dart';
+import '../services/ad_service.dart';
 import '../services/auth_service.dart';
 import '../services/image_scanner_service.dart';
 import '../services/monetization_service.dart';
 import '../services/notification_service.dart';
 import '../services/quota_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/ad_banner.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/scanned_item_card.dart';
 import '../widgets/stats_card.dart';
 import 'login_screen.dart';
-import 'qris_payment_screen.dart';
+import '../utils/app_log.dart';
 
 enum FilterMode {
   qrisOnly,
@@ -68,9 +71,10 @@ class _HomeScreenState extends State<HomeScreen> {
       if (user != null) {
         await QuotaService.getRemainingQuota();
         await MonetizationService.isProUser();
+        AuthService.syncDeviceInfoToServer().ignore();
       }
     } catch (e) {
-      debugPrint('Profile sync on startup skipped: $e');
+      AppLog.d('Profile sync on startup skipped: $e');
     }
   }
 
@@ -110,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     } catch (e) {
-      debugPrint('Error loading items from storage: $e');
+      AppLog.d('Error loading items from storage: $e');
     }
   }
 
@@ -120,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final data = _items.map((item) => item.toJson()).toList();
       await prefs.setString('saved_scanned_items_v1', jsonEncode(data));
     } catch (e) {
-      debugPrint('Error saving items to storage: $e');
+      AppLog.d('Error saving items to storage: $e');
     }
   }
 
@@ -329,7 +333,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final savedFile = await sourceFile.copy(targetPath);
       return savedFile;
     } catch (e) {
-      debugPrint('Error copying file to permanent storage: $e');
+      AppLog.d('Error copying file to permanent storage: $e');
       return sourceFile;
     }
   }
@@ -428,7 +432,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _items.insert(0, item);
           }
         } catch (e) {
-          debugPrint('Error scanning entity ${entity.id}: $e');
+          AppLog.d('Error scanning entity ${entity.id}: $e');
         }
 
         _processedCount++;
@@ -538,7 +542,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
           _items.insert(0, item);
         } catch (e) {
-          debugPrint('Error scanning file ${file.path}: $e');
+          AppLog.d('Error scanning file ${file.path}: $e');
         }
 
         _processedCount++;
@@ -620,8 +624,9 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) {
         return Container(
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            color: AppTheme.cardColor(isDark),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+            border: Border(top: BorderSide(color: AppTheme.borderColor(isDark), width: 1)),
           ),
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           child: SafeArea(
@@ -632,10 +637,10 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Center(
                   child: Container(
-                    width: 38,
+                    width: 36,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white24 : Colors.grey.shade300,
+                      color: AppTheme.borderColor(isDark),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -643,15 +648,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 18),
                 Row(
                   children: [
-                    CircleAvatar(
-                      radius: 26,
-                      backgroundColor: user?.isGuest == false
-                          ? AppTheme.primary.withOpacity(0.15)
-                          : Colors.grey.withOpacity(0.15),
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: AppTheme.subtleBg(isDark),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.borderColor(isDark)),
+                      ),
                       child: Icon(
-                        user?.isGuest == false ? Icons.account_circle : Icons.person_outline,
-                        color: user?.isGuest == false ? AppTheme.primary : Colors.grey.shade700,
-                        size: 32,
+                        user?.isGuest == false ? Icons.verified_user_outlined : Icons.person_outline_rounded,
+                        color: user?.isGuest == false ? AppTheme.primary : AppTheme.mutedColor(isDark),
+                        size: 24,
                       ),
                     ),
                     const SizedBox(width: 14),
@@ -661,25 +669,39 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Row(
                             children: [
-                              Text(
-                                user?.name ?? 'Pengguna',
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                              Flexible(
+                                child: Text(
+                                  user?.name ?? 'Pengguna',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.3,
+                                    color: AppTheme.inkColor(isDark),
+                                  ),
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
                                 decoration: BoxDecoration(
                                   color: user?.isGuest == false
                                       ? AppTheme.primary.withOpacity(0.12)
-                                      : Colors.grey.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(6),
+                                      : AppTheme.subtleBg(isDark),
+                                  borderRadius: BorderRadius.circular(5),
+                                  border: Border.all(
+                                    color: user?.isGuest == false
+                                        ? AppTheme.primary.withOpacity(0.35)
+                                        : AppTheme.borderColor(isDark),
+                                  ),
                                 ),
                                 child: Text(
                                   user?.isGuest == false ? 'Google' : 'Tamu',
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
-                                    color: user?.isGuest == false ? AppTheme.primary : Colors.grey,
+                                    color: user?.isGuest == false ? AppTheme.primary : AppTheme.mutedColor(isDark),
                                   ),
                                 ),
                               ),
@@ -690,7 +712,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             user?.email ?? '',
                             style: TextStyle(
                               fontSize: 12,
-                              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                              color: AppTheme.mutedColor(isDark),
                             ),
                           ),
                         ],
@@ -701,12 +723,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 18),
                 // Quota Card in Profile
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                    borderRadius: BorderRadius.circular(14),
+                    color: AppTheme.subtleBg(isDark),
+                    borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: isPro ? Colors.amber.withOpacity(0.4) : AppTheme.primary.withOpacity(0.3),
+                      color: isPro ? AppTheme.qrAmber.withOpacity(0.45) : AppTheme.borderColor(isDark),
                     ),
                   ),
                   child: Row(
@@ -715,21 +737,26 @@ class _HomeScreenState extends State<HomeScreen> {
                       Row(
                         children: [
                           Icon(
-                            isPro ? Icons.star_rounded : Icons.confirmation_number_rounded,
-                            color: isPro ? Colors.amber : AppTheme.primary,
-                            size: 22,
+                            isPro ? Icons.star_rounded : Icons.confirmation_number_outlined,
+                            color: isPro ? AppTheme.qrAmber : AppTheme.primary,
+                            size: 20,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 10),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Sisa Kuota Hapus', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                              Text(
+                                'Sisa Kuota Hapus',
+                                style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark)),
+                              ),
+                              const SizedBox(height: 1),
                               Text(
                                 isPro ? 'UNLIMITED (PRO)' : '$remainingQuota Foto',
                                 style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w800,
-                                  color: isPro ? Colors.amber : AppTheme.primary,
+                                  color: isPro ? AppTheme.qrAmber : AppTheme.inkColor(isDark),
+                                  fontFeatures: const [FontFeature.tabularFigures()],
                                 ),
                               ),
                             ],
@@ -743,29 +770,56 @@ class _HomeScreenState extends State<HomeScreen> {
                             await QuotaService.watchRewardedAdForQuota(context);
                             setState(() {});
                           },
-                          icon: const Icon(Icons.ondemand_video_rounded, size: 16),
-                          label: const Text('+1 Kuota', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
+                          icon: const Icon(Icons.ondemand_video_rounded, size: 15, color: AppTheme.primary),
+                          label: const Text(
+                            '+1 Kuota',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                              color: AppTheme.primary,
+                            ),
+                          ),
                         ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 14),
                 ElevatedButton.icon(
-                  onPressed: () {
+                  onPressed: () async {
                     Navigator.of(ctx).pop();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const QrisPaymentScreen()),
-                    );
+                    await MonetizationService.openProPurchase(context);
                   },
-                  icon: const Icon(Icons.workspace_premium_rounded, color: Colors.white, size: 20),
-                  label: const Text('Pembayaran & Beli PRO (QRIS)', style: TextStyle(fontWeight: FontWeight.w800, color: Colors.white)),
+                  icon: const Icon(Icons.workspace_premium_rounded, color: Colors.white, size: 19),
+                  label: const Text(
+                    'Beli PRO (Sekali Bayar)',
+                    style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+                  ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFD97706),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    backgroundColor: AppTheme.qrAmber,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (_items.isNotEmpty) ...[
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      _clearAll();
+                    },
+                    icon: Icon(Icons.delete_sweep_outlined, color: AppTheme.inkColor(isDark), size: 18),
+                    label: Text(
+                      'Bersihkan Semua Daftar Foto',
+                      style: TextStyle(color: AppTheme.inkColor(isDark), fontWeight: FontWeight.w600),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.borderColor(isDark)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 OutlinedButton.icon(
                   onPressed: () async {
                     final navigator = Navigator.of(context);
@@ -777,12 +831,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       (route) => false,
                     );
                   },
-                  icon: const Icon(Icons.logout_rounded, color: Colors.red, size: 18),
-                  label: const Text('Ganti Akun / Keluar', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w700)),
+                  icon: const Icon(Icons.logout_rounded, color: AppTheme.dangerRed, size: 17),
+                  label: const Text(
+                    'Ganti Akun / Keluar',
+                    style: TextStyle(color: AppTheme.dangerRed, fontWeight: FontWeight.w700),
+                  ),
                   style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Colors.red.withOpacity(0.4)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    side: BorderSide(color: AppTheme.dangerRed.withOpacity(0.35)),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
               ],
@@ -841,15 +898,11 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) {
         return Container(
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                blurRadius: 20,
-                offset: const Offset(0, -4),
-              ),
-            ],
+            color: AppTheme.cardColor(isDark),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+            border: Border(
+              top: BorderSide(color: AppTheme.borderColor(isDark), width: 1),
+            ),
           ),
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
           child: SafeArea(
@@ -860,10 +913,10 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Center(
                   child: Container(
-                    width: 38,
+                    width: 36,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white24 : Colors.grey.shade300,
+                      color: AppTheme.borderColor(isDark),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -874,10 +927,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(12),
+                        color: AppTheme.dangerRed.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.dangerRed.withOpacity(0.3)),
                       ),
-                      child: const Icon(Icons.delete_sweep_rounded, color: Colors.red, size: 26),
+                      child: const Icon(Icons.delete_sweep_rounded, color: AppTheme.dangerRed, size: 24),
                     ),
                     const SizedBox(width: 14),
                     Expanded(
@@ -886,14 +940,19 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Text(
                             title,
-                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              fontSize: 16.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.3,
+                              color: AppTheme.inkColor(isDark),
+                            ),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             subtitle ?? 'File akan dihapus secara permanen dari galeri ponsel.',
                             style: TextStyle(
                               fontSize: 12,
-                              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                              color: AppTheme.mutedColor(isDark),
                             ),
                           ),
                         ],
@@ -906,10 +965,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
                         decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(10),
+                          color: AppTheme.subtleBg(isDark),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppTheme.borderColor(isDark)),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -919,7 +979,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             Flexible(
                               child: Text(
                                 'Hemat $formattedSize',
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  fontFeatures: [FontFeature.tabularFigures()],
+                                ),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -930,10 +994,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
                         decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(10),
+                          color: AppTheme.subtleBg(isDark),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppTheme.borderColor(isDark)),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -943,7 +1008,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             Flexible(
                               child: Text(
                                 qrisCount > 0 ? '$qrisCount QRIS' : '$regQrCount QR',
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  fontFeatures: [FontFeature.tabularFigures()],
+                                ),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -965,20 +1034,25 @@ class _HomeScreenState extends State<HomeScreen> {
                         return Container(
                           width: 64,
                           decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                            borderRadius: BorderRadius.circular(10),
+                            color: AppTheme.subtleBg(isDark),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppTheme.borderColor(isDark)),
                           ),
                           child: Center(
                             child: Text(
                               '+${count - 7}',
-                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
                             ),
                           ),
                         );
                       }
                       final it = items[idx];
                       return ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(8),
                         child: Stack(
                           children: [
                             Image.file(
@@ -990,8 +1064,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               errorBuilder: (_, __, ___) => Container(
                                 width: 64,
                                 height: 64,
-                                color: Colors.grey.shade300,
-                                child: const Icon(Icons.broken_image, size: 20, color: Colors.grey),
+                                color: AppTheme.subtleBg(isDark),
+                                child: Icon(Icons.broken_image_outlined, size: 18, color: AppTheme.mutedColor(isDark)),
                               ),
                             ),
                             if (it.isQRIS)
@@ -1001,7 +1075,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                                   decoration: BoxDecoration(
-                                    color: AppTheme.qrisGreen,
+                                    color: AppTheme.qrisGreenDark,
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: const Text('QRIS', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w700)),
@@ -1017,20 +1091,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                    color: AppTheme.qrAmber.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.qrAmber.withOpacity(0.3)),
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.shield_outlined, size: 15, color: Colors.orange.shade700),
+                      const Icon(Icons.shield_outlined, size: 15, color: AppTheme.qrAmber),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           'Sistem Android akan meminta konfirmasi izin untuk menghapus file dari memori ponsel.',
                           style: TextStyle(
                             fontSize: 11,
-                            color: isDark ? Colors.orange.shade200 : Colors.orange.shade900,
+                            color: AppTheme.inkColor(isDark),
                           ),
                         ),
                       ),
@@ -1046,10 +1120,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         onPressed: () => Navigator.of(ctx).pop(false),
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          side: BorderSide(color: isDark ? const Color(0xFF475569) : const Color(0xFFCBD5E1)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          side: BorderSide(color: AppTheme.borderColor(isDark)),
                         ),
-                        child: const Text('Batal', style: TextStyle(fontWeight: FontWeight.w600)),
+                        child: Text(
+                          'Batal',
+                          style: TextStyle(fontWeight: FontWeight.w600, color: AppTheme.inkColor(isDark)),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1058,12 +1135,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: ElevatedButton.icon(
                         onPressed: () => Navigator.of(ctx).pop(true),
                         icon: const Icon(Icons.delete_rounded, size: 17, color: Colors.white),
-                        label: Text('Hapus $count Foto', style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+                        label: Text(
+                          'Hapus $count Foto',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red.shade600,
+                          backgroundColor: AppTheme.dangerRed,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
                       ),
                     ),
@@ -1118,6 +1202,27 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
+    // Potong kuota di server SEBELUM foto dihapus (server-authoritative).
+    // Kalau gagal (offline / kuota habis), tidak ada foto yang dihapus.
+    String? quotaRef;
+    var quotaConsumed = 0;
+    if (!isPro) {
+      quotaRef = 'del_${DateTime.now().microsecondsSinceEpoch}';
+      quotaConsumed = selected.length;
+      final quotaOk = await QuotaService.consumeQuota(quotaConsumed, refId: quotaRef);
+      if (!quotaOk) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(QuotaService.lastError ?? 'Kuota tidak cukup.'),
+            backgroundColor: AppTheme.dangerRed,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
+
     // Hapus foto asli dari Galeri Sistem HP (MediaStore)
     final systemAssetIds = selected
         .map((i) => i.assetId)
@@ -1130,7 +1235,7 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         successfullyDeletedAssetIds = await PhotoManager.editor.deleteWithIds(systemAssetIds);
       } catch (e) {
-        debugPrint('Error deleting from system gallery: $e');
+        AppLog.d('Error deleting from system gallery: $e');
       }
     }
 
@@ -1143,6 +1248,10 @@ class _HomeScreenState extends State<HomeScreen> {
             behavior: SnackBarBehavior.floating,
           ),
         );
+      }
+      // Penghapusan tidak terjadi → kembalikan kuota yang sudah terpotong.
+      if (quotaRef != null && quotaConsumed > 0) {
+        await QuotaService.refundQuota(quotaRef, quotaConsumed);
       }
       return;
     }
@@ -1161,20 +1270,19 @@ class _HomeScreenState extends State<HomeScreen> {
           item.file.deleteSync();
         }
       } catch (e) {
-        debugPrint('Error deleting file: $e');
+        AppLog.d('Error deleting file: $e');
       }
     }
 
     if (mounted) {
-      if (!isPro && itemsToRemove.isNotEmpty) {
-        await QuotaService.consumeQuota(itemsToRemove.length);
-      }
       final remaining = await QuotaService.getRemainingQuota();
       setState(() {
         final removeIds = itemsToRemove.map((i) => i.id).toSet();
         _items.removeWhere((i) => removeIds.contains(i.id));
       });
       await _saveItemsToStorage();
+      // Gating interstitial AdMob: hanya dihitung dari aksi hapus yang berhasil.
+      AdService.noteUserAction();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1230,6 +1338,26 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
+    // Potong kuota di server SEBELUM foto dihapus (server-authoritative).
+    String? quotaRef;
+    var quotaConsumed = 0;
+    if (!isPro) {
+      quotaRef = 'del_${DateTime.now().microsecondsSinceEpoch}';
+      quotaConsumed = itemCount;
+      final quotaOk = await QuotaService.consumeQuota(quotaConsumed, refId: quotaRef);
+      if (!quotaOk) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(QuotaService.lastError ?? 'Kuota tidak cukup.'),
+            backgroundColor: AppTheme.dangerRed,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
+
     final systemAssetIds = _items
         .map((i) => i.assetId)
         .whereType<String>()
@@ -1241,7 +1369,7 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         successfullyDeletedAssetIds = await PhotoManager.editor.deleteWithIds(systemAssetIds);
       } catch (e) {
-        debugPrint('Error deleting from system gallery: $e');
+        AppLog.d('Error deleting from system gallery: $e');
       }
     }
 
@@ -1253,6 +1381,10 @@ class _HomeScreenState extends State<HomeScreen> {
             behavior: SnackBarBehavior.floating,
           ),
         );
+      }
+      // Penghapusan tidak terjadi → kembalikan kuota yang sudah terpotong.
+      if (quotaRef != null && quotaConsumed > 0) {
+        await QuotaService.refundQuota(quotaRef, quotaConsumed);
       }
       return;
     }
@@ -1271,20 +1403,19 @@ class _HomeScreenState extends State<HomeScreen> {
           item.file.deleteSync();
         }
       } catch (e) {
-        debugPrint('Error deleting file: $e');
+        AppLog.d('Error deleting file: $e');
       }
     }
 
     if (mounted) {
-      if (!isPro && itemsToRemove.isNotEmpty) {
-        await QuotaService.consumeQuota(itemsToRemove.length);
-      }
       final remaining = await QuotaService.getRemainingQuota();
       setState(() {
         final removeIds = itemsToRemove.map((i) => i.id).toSet();
         _items.removeWhere((i) => removeIds.contains(i.id));
       });
       await _saveItemsToStorage();
+      // Gating interstitial AdMob: hanya dihitung dari aksi hapus yang berhasil.
+      AdService.noteUserAction();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1308,27 +1439,18 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
-        title: Row(
+        title: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppTheme.primary, AppTheme.qrisGreen],
-                ),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.qr_code_scanner, color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 8),
-            const Flexible(
+            AppLogo(size: 32),
+            SizedBox(width: 10),
+            Flexible(
               child: Text(
-                'QRIS Detector',
+                'Qristal',
                 style: TextStyle(
-                  fontSize: 17,
+                  fontSize: 18,
                   fontWeight: FontWeight.w800,
-                  letterSpacing: -0.3,
+                  letterSpacing: -0.4,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1337,118 +1459,27 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
-          // Kuota Hapus Chip Minimalis (Bisa diklik untuk info / tambah kuota lewat iklan)
-          FutureBuilder<int>(
-            future: QuotaService.getRemainingQuota(),
-            builder: (context, quotaSnap) {
-              final quota = quotaSnap.data ?? 5;
-              return Container(
-                margin: const EdgeInsets.only(right: 6),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () async {
-                    await QuotaService.showQuotaManagementDialog(context);
-                    setState(() {});
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primary.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.confirmation_number_rounded, color: AppTheme.primary, size: 13),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$quota',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _showAccountModal,
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
                 ),
-              );
-            },
-          ),
-          // PRO Badge & Modal Upgrade Trigger Minimalis
-          FutureBuilder<bool>(
-            future: MonetizationService.isProUser(),
-            builder: (context, snapshot) {
-              final isPro = snapshot.data ?? false;
-              return Container(
-                margin: const EdgeInsets.only(right: 4),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () async {
-                    await MonetizationService.showProUpgradeModal(context);
-                    setState(() {});
-                  },
-                  onLongPress: isPro
-                      ? () async {
-                          // Secret Dev Reset PRO Status
-                          await MonetizationService.setProUser(false);
-                          setState(() {});
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('[Dev Mode] Reset status ke FREE User.')),
-                            );
-                          }
-                        }
-                      : null,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: isPro ? Colors.amber.withOpacity(0.18) : Colors.amber.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.amber.shade600, width: 1),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isPro ? Icons.star_rounded : Icons.workspace_premium_rounded,
-                          color: Colors.amber.shade700,
-                          size: 13,
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          'PRO',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.amber.shade800,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                child: Icon(
+                  Icons.person_outline_rounded,
+                  size: 20,
+                  color: AppTheme.inkColor(isDark),
                 ),
-              );
-            },
-          ),
-          if (_items.isNotEmpty)
-            IconButton(
-              tooltip: 'Bersihkan Daftar',
-              icon: const Icon(Icons.delete_sweep_outlined, size: 20),
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              padding: const EdgeInsets.all(4),
-              onPressed: _clearAll,
+              ),
             ),
-          IconButton(
-            tooltip: 'Akun & Profil',
-            icon: const Icon(Icons.account_circle_outlined, size: 22),
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            onPressed: _showAccountModal,
           ),
-          const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(
@@ -1536,9 +1567,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
+                  color: AppTheme.cardColor(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.primary.withOpacity(0.35)),
                 ),
                 child: Column(
                   children: [
@@ -1559,21 +1590,26 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _isCancelRequested
                                     ? 'Menghentikan pemindaian...'
                                     : (_totalGalleryCount > 0
-                                        ? 'AI memindai foto... (${_alreadyScannedCount + _processedCount} / $_totalGalleryCount)'
-                                        : 'AI memindai foto... ($_processedCount / $_totalToProcess)'),
+                                        ? 'Memindai galeri... (${_alreadyScannedCount + _processedCount} / $_totalGalleryCount)'
+                                        : 'Memindai galeri... ($_processedCount / $_totalToProcess)'),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  fontFeatures: [FontFeature.tabularFigures()],
+                                ),
                               ),
                               if (_scanSpeed > 0 && !_isCancelRequested)
                                 Padding(
                                   padding: const EdgeInsets.only(top: 2),
                                   child: Text(
-                                    '⚡ ${_scanSpeed.toStringAsFixed(1)} foto/dtk • $qrisCount QRIS terdeteksi',
-                                    style: const TextStyle(
-                                      fontSize: 10,
+                                    '${_scanSpeed.toStringAsFixed(1)} foto/dtk • $qrisCount QRIS terdeteksi',
+                                    style: TextStyle(
+                                      fontSize: 10.5,
                                       fontWeight: FontWeight.w600,
-                                      color: AppTheme.qrisGreenDark,
+                                      color: isDark ? const Color(0xFF34D399) : AppTheme.qrisGreenDark,
+                                      fontFeatures: const [FontFeature.tabularFigures()],
                                     ),
                                   ),
                                 ),
@@ -1585,7 +1621,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           _totalGalleryCount > 0
                               ? '${(((_alreadyScannedCount + _processedCount) / (_totalGalleryCount == 0 ? 1 : _totalGalleryCount)) * 100).toInt()}%'
                               : '${((_processedCount / (_totalToProcess == 0 ? 1 : _totalToProcess)) * 100).toInt()}%',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.primary),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.primary,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
                         ),
                         const SizedBox(width: 8),
                         // Tombol Jeda / Hentikan Pemindaian
@@ -1601,9 +1642,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.red.withOpacity(0.12),
+                              color: AppTheme.dangerRed.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: Colors.red.withOpacity(0.3)),
+                              border: Border.all(color: AppTheme.dangerRed.withOpacity(0.3)),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -1611,12 +1652,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 Icon(
                                   _isCancelRequested ? Icons.hourglass_top : Icons.pause_circle_filled,
                                   size: 14,
-                                  color: Colors.red,
+                                  color: AppTheme.dangerRed,
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
                                   _isCancelRequested ? 'Menghentikan...' : 'Jeda',
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.red),
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.dangerRed),
                                 ),
                               ],
                             ),
@@ -1626,15 +1667,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 8),
                     ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(3),
                       child: LinearProgressIndicator(
                         value: _totalGalleryCount > 0
                             ? (_alreadyScannedCount + _processedCount) / _totalGalleryCount
                             : (_totalToProcess > 0 ? _processedCount / _totalToProcess : null),
-                        minHeight: 6,
-                        backgroundColor: AppTheme.primary.withOpacity(0.15),
+                        minHeight: 5,
+                        backgroundColor: AppTheme.subtleBg(isDark),
                         valueColor: AlwaysStoppedAnimation<Color>(
-                          _isCancelRequested ? Colors.orange : AppTheme.primary,
+                          _isCancelRequested ? AppTheme.qrAmber : AppTheme.primary,
                         ),
                       ),
                     ),
@@ -1651,13 +1692,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.account_balance_wallet_outlined, size: 14, color: AppTheme.qrisGreen),
-                        const SizedBox(width: 4),
+                        const Icon(Icons.account_balance_wallet_outlined, size: 13, color: AppTheme.qrisGreen),
+                        const SizedBox(width: 5),
                         Text(
                           _filterMode == FilterMode.allQr
                               ? 'Filter Jenis & Penyelenggara:'
                               : 'Penyelenggara / Bank QRIS:',
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textMuted),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.mutedColor(isDark),
+                          ),
                         ),
                         if (_selectedAcquirerFilter != 'ALL') ...[
                           const Spacer(),
@@ -1665,13 +1710,13 @@ class _HomeScreenState extends State<HomeScreen> {
                             onTap: () => setState(() => _selectedAcquirerFilter = 'ALL'),
                             child: const Text(
                               'Reset Filter',
-                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.red),
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.dangerRed),
                             ),
                           ),
                         ],
                       ],
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 5),
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
@@ -1686,13 +1731,23 @@ class _HomeScreenState extends State<HomeScreen> {
                             onSelected: (selected) {
                               if (selected) setState(() => _selectedAcquirerFilter = 'ALL');
                             },
-                            selectedColor: AppTheme.primary.withOpacity(0.18),
+                            backgroundColor: AppTheme.cardColor(isDark),
+                            selectedColor: AppTheme.primary.withOpacity(0.15),
+                            side: BorderSide(
+                              color: _selectedAcquirerFilter == 'ALL'
+                                  ? AppTheme.primary
+                                  : AppTheme.borderColor(isDark),
+                              width: _selectedAcquirerFilter == 'ALL' ? 1.4 : 1.0,
+                            ),
                             labelStyle: TextStyle(
                               fontSize: 11,
                               fontWeight: _selectedAcquirerFilter == 'ALL' ? FontWeight.w700 : FontWeight.w500,
+                              color: _selectedAcquirerFilter == 'ALL'
+                                  ? (isDark ? const Color(0xFF34D399) : AppTheme.qrisGreenDark)
+                                  : AppTheme.inkColor(isDark),
                             ),
                             showCheckmark: false,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           ),
                           if (_filterMode == FilterMode.allQr && regularQrCount > 0)
                             Padding(
@@ -1705,18 +1760,23 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _selectedAcquirerFilter = selected ? 'NON_QRIS' : 'ALL';
                                   });
                                 },
-                                selectedColor: AppTheme.qrAmber.withOpacity(0.25),
+                                backgroundColor: AppTheme.cardColor(isDark),
+                                selectedColor: AppTheme.qrAmber.withOpacity(0.18),
                                 labelStyle: TextStyle(
                                   fontSize: 11,
                                   fontWeight: _selectedAcquirerFilter == 'NON_QRIS' ? FontWeight.w700 : FontWeight.w500,
-                                  color: _selectedAcquirerFilter == 'NON_QRIS' ? Colors.orange.shade900 : null,
+                                  color: _selectedAcquirerFilter == 'NON_QRIS'
+                                      ? AppTheme.qrAmber
+                                      : AppTheme.inkColor(isDark),
                                 ),
                                 side: BorderSide(
-                                  color: _selectedAcquirerFilter == 'NON_QRIS' ? AppTheme.qrAmber : const Color(0xFFE2E8F0),
-                                  width: _selectedAcquirerFilter == 'NON_QRIS' ? 1.5 : 1,
+                                  color: _selectedAcquirerFilter == 'NON_QRIS'
+                                      ? AppTheme.qrAmber
+                                      : AppTheme.borderColor(isDark),
+                                  width: _selectedAcquirerFilter == 'NON_QRIS' ? 1.4 : 1.0,
                                 ),
                                 showCheckmark: false,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
                             ),
                           ...acquirerCounts.entries.map((entry) {
@@ -1736,18 +1796,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                     }
                                   });
                                 },
-                                selectedColor: AppTheme.qrisGreen.withOpacity(0.18),
+                                backgroundColor: AppTheme.cardColor(isDark),
+                                selectedColor: AppTheme.qrisGreen.withOpacity(0.15),
                                 labelStyle: TextStyle(
                                   fontSize: 11,
                                   fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
-                                  color: isSel ? AppTheme.qrisGreenDark : null,
+                                  color: isSel
+                                      ? (isDark ? const Color(0xFF34D399) : AppTheme.qrisGreenDark)
+                                      : AppTheme.inkColor(isDark),
                                 ),
                                 side: BorderSide(
-                                  color: isSel ? AppTheme.qrisGreen : const Color(0xFFE2E8F0),
-                                  width: isSel ? 1.5 : 1,
+                                  color: isSel ? AppTheme.qrisGreen : AppTheme.borderColor(isDark),
+                                  width: isSel ? 1.4 : 1.0,
                                 ),
                                 showCheckmark: false,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
                             );
                           }),
@@ -1762,43 +1825,55 @@ class _HomeScreenState extends State<HomeScreen> {
             if (shouldShowDeleteToolbar)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                  borderRadius: BorderRadius.circular(12),
+                  color: AppTheme.cardColor(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
                 ),
                 child: Row(
                   children: [
                     InkWell(
                       onTap: _toggleSelectAll,
-                      child: Row(
-                        children: [
-                          Icon(
-                            filteredItems.isNotEmpty && filteredItems.every((i) => i.isSelected)
-                                ? Icons.check_box
-                                : Icons.check_box_outline_blank,
-                            size: 18,
-                            color: AppTheme.primary,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            selectedCount > 0 ? '$selectedCount dipilih' : 'Pilih Semua',
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                          ),
-                        ],
+                      borderRadius: BorderRadius.circular(6),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+                        child: Row(
+                          children: [
+                            Icon(
+                              filteredItems.isNotEmpty && filteredItems.every((i) => i.isSelected)
+                                  ? Icons.check_box_rounded
+                                  : Icons.check_box_outline_blank_rounded,
+                              size: 18,
+                              color: AppTheme.primary,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              selectedCount > 0 ? '$selectedCount dipilih' : 'Pilih Semua',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     const Spacer(),
                     if (selectedCount > 0) ...[
                       TextButton.icon(
                         onPressed: _shareSelected,
-                        icon: const Icon(Icons.share, size: 15),
-                        label: const Text('Bagikan', style: TextStyle(fontSize: 12)),
+                        icon: const Icon(Icons.share_outlined, size: 15),
+                        label: const Text('Bagikan', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
                       TextButton.icon(
                         onPressed: _deleteSelected,
-                        icon: const Icon(Icons.delete_outline, size: 15, color: Colors.red),
-                        label: const Text('Hapus', style: TextStyle(fontSize: 12, color: Colors.red)),
+                        icon: const Icon(Icons.delete_outline_rounded, size: 15, color: AppTheme.dangerRed),
+                        label: const Text(
+                          'Hapus',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.dangerRed),
+                        ),
                       ),
                     ],
                   ],
@@ -1850,103 +1925,116 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.all(16),
+      // Banner AdMob: tidak tampil untuk PRO, dan tidak memakan ruang bila gagal dimuat.
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const AdBanner(),
+          Container(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E293B) : Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 10,
-              offset: const Offset(0, -4),
-            ),
-          ],
+          color: AppTheme.cardColor(isDark),
+          border: Border(
+            top: BorderSide(color: AppTheme.borderColor(isDark), width: 1),
+          ),
         ),
-        child: Row(
-          children: [
-            // AI Automatic Gallery Scanner Button
-            Expanded(
-              flex: 4,
-              child: ElevatedButton.icon(
-                onPressed: _isBatchProcessing ? null : _scanAllGalleryPhotos,
-                icon: const Icon(Icons.auto_awesome, size: 20),
-                label: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    _items.isNotEmpty ? 'Pindai / Lanjutkan Galeri (AI)' : 'Pindai Semua Galeri (AI)',
-                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+        child: SafeArea(
+          top: false,
+          child: Row(
+            children: [
+              // Gallery Scanner Action Button
+              Expanded(
+                flex: 4,
+                child: ElevatedButton.icon(
+                  onPressed: _isBatchProcessing ? null : _scanAllGalleryPhotos,
+                  icon: const Icon(Icons.qr_code_scanner_rounded, size: 19),
+                  label: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      _items.isNotEmpty ? 'Pindai / Lanjutkan Galeri (AI)' : 'Pindai Semua Galeri (AI)',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13.5,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
                   ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.qrisGreenDark,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.qrisGreenDark,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            // Popup Option: Manual Multi-select Picker or Camera
-            PopupMenuButton<String>(
-              onSelected: (value) {
-                if (value == 'picker') {
-                  _pickImagesFromGallery();
-                } else if (value == 'camera') {
-                  _takePhotoWithCamera();
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'picker',
-                  child: Row(
-                    children: [
-                      Icon(Icons.photo_library_outlined, size: 18),
-                      SizedBox(width: 10),
-                      Text('Pilih Beberapa Foto Manual'),
-                    ],
+              const SizedBox(width: 10),
+              // Popup Option: Manual Multi-select Picker or Camera
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'picker') {
+                    _pickImagesFromGallery();
+                  } else if (value == 'camera') {
+                    _takePhotoWithCamera();
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'picker',
+                    child: Row(
+                      children: [
+                        Icon(Icons.photo_library_outlined, size: 18),
+                        SizedBox(width: 10),
+                        Text('Pilih Beberapa Foto Manual'),
+                      ],
+                    ),
                   ),
-                ),
-                const PopupMenuItem(
-                  value: 'camera',
-                  child: Row(
-                    children: [
-                      Icon(Icons.camera_alt_outlined, size: 18),
-                      SizedBox(width: 10),
-                      Text('Ambil Foto Kamera'),
-                    ],
+                  const PopupMenuItem(
+                    value: 'camera',
+                    child: Row(
+                      children: [
+                        Icon(Icons.camera_alt_outlined, size: 18),
+                        SizedBox(width: 10),
+                        Text('Ambil Foto Kamera'),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: isDark ? const Color(0xFF475569) : const Color(0xFFCBD5E1),
+                ],
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.subtleBg(isDark),
+                    border: Border.all(
+                      color: AppTheme.borderColor(isDark),
+                    ),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  borderRadius: BorderRadius.circular(12),
+                  child: Icon(Icons.more_horiz_rounded, size: 20, color: AppTheme.inkColor(isDark)),
                 ),
-                child: const Icon(Icons.more_vert, size: 20),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+          ),
+        ],
       ),
     );
   }
 
-
-
   Widget _buildEmptyState(bool isDark) {
-    String message = 'Belum ada foto yang dipindai.\nKlik tombol di bawah agar AI otomatis memindai seluruh foto di galeri HP Anda.';
-    IconData icon = Icons.photo_library_outlined;
-    Color iconColor = AppTheme.primary;
+    String message = 'Belum ada foto yang dipindai.\nTekan tombol di bawah untuk memindai dan memverifikasi kode QRIS di galeri perangkat Anda.';
+    IconData icon = Icons.qr_code_scanner_rounded;
+    Color iconColor = AppTheme.qrisGreen;
 
     if (_items.isNotEmpty) {
       if (_filterMode == FilterMode.qrisOnly) {
-        message = 'Tidak ada foto QRIS yang ditemukan dari ${_items.length} foto yang dipindai.\nCoba pemicu pemindaian ulang galeri.';
+        message = 'Tidak ada foto QRIS yang ditemukan dari ${_items.length} foto yang dipindai.\nCoba picu pemindaian ulang galeri.';
         icon = Icons.verified_outlined;
         iconColor = AppTheme.qrisGreen;
       } else if (_filterMode == FilterMode.allQr) {
         message = 'Tidak ada foto dengan QR Code yang ditemukan.';
-        icon = Icons.qr_code_2;
+        icon = Icons.qr_code_2_rounded;
         iconColor = AppTheme.qrAmber;
       }
     }
@@ -1954,46 +2042,73 @@ class _HomeScreenState extends State<HomeScreen> {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(22),
-              decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, size: 48, color: iconColor),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              _items.isEmpty ? 'Pindai Otomatis Galeri HP' : 'Tidak Ada Hasil Filter',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                height: 1.5,
-              ),
-            ),
-            if (_items.isEmpty) ...[
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: _scanAllGalleryPhotos,
-                icon: const Icon(Icons.auto_awesome),
-                label: const Text('Pindai Semua Foto Galeri (AI)'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.qrisGreenDark,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 380),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppTheme.cardColor(isDark),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.borderColor(isDark)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_items.isEmpty)
+                const AppLogo(size: 56)
+              else
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: AppTheme.subtleBg(isDark),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: iconColor.withOpacity(0.4)),
+                  ),
+                  child: Icon(icon, size: 28, color: iconColor),
+                ),
+              const SizedBox(height: 18),
+              Text(
+                _items.isEmpty ? 'Pindai Galeri Perangkat' : 'Tidak Ada Hasil Filter',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3,
+                  color: AppTheme.inkColor(isDark),
                 ),
               ),
+              const SizedBox(height: 8),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: AppTheme.mutedColor(isDark),
+                  height: 1.5,
+                ),
+              ),
+              if (_items.isEmpty) ...[
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _scanAllGalleryPhotos,
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                    label: const Text('Mulai Pindai Galeri'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.qrisGreenDark,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

@@ -50,6 +50,11 @@ dependencies:
   google_sign_in: ^6.2.2
   device_info_plus: ^11.3.0
   supabase_flutter: ^2.15.4
+  # AdMob. Versi 5.3.1 = versi terakhir yang kompatibel dengan Flutter 3.24
+  # (6.0.0+ mensyaratkan Flutter >= 3.27). Membawa GMA SDK Android 23.6.0.
+  google_mobile_ads: ^5.3.1
+  # Sesi auth disimpan di Keystore/Keychain, bukan SharedPreferences plaintext.
+  flutter_secure_storage: ^10.3.4
 
 dev_dependencies:
   flutter_test:

@@ -8,7 +8,7 @@ allprojects {
 rootProject.ext.flutter = [
     compileSdkVersion: 34,
     targetSdkVersion: 34,
-    minSdkVersion: 21,
+    minSdkVersion: 23,
 ]
 
 rootProject.buildDir = "../build"

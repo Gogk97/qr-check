@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 class StatsCard extends StatelessWidget {
   final String title;
@@ -21,80 +22,81 @@ class StatsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final baseBorder = AppTheme.borderColor(isDark);
+    final ink = AppTheme.inkColor(isDark);
+    final muted = AppTheme.mutedColor(isDark);
 
-    return InkWell(
+    return GestureDetector(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 12),
         decoration: BoxDecoration(
           color: isSelected
-              ? color.withOpacity(isDark ? 0.25 : 0.12)
-              : (isDark ? const Color(0xFF1E293B) : Colors.white),
-          borderRadius: BorderRadius.circular(16),
+              ? (isDark ? color.withOpacity(0.14) : color.withOpacity(0.08))
+              : AppTheme.cardColor(isDark),
+          borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: isSelected ? color : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
-            width: isSelected ? 2 : 1,
+            color: isSelected ? color : baseBorder,
+            width: isSelected ? 1.5 : 1.0,
           ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: color.withOpacity(0.2),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  )
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(isDark ? 0.2 : 0.03),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  )
-                ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(6),
+                  padding: const EdgeInsets.all(5),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
+                    color: isSelected
+                        ? color.withOpacity(0.18)
+                        : AppTheme.subtleBg(isDark),
+                    borderRadius: BorderRadius.circular(6),
                   ),
-                  child: Icon(icon, size: 16, color: color),
+                  child: Icon(
+                    icon,
+                    color: isSelected ? color : muted,
+                    size: 14,
+                  ),
                 ),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      count.toString(),
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: isSelected ? color : (isDark ? Colors.white : const Color(0xFF0F172A)),
-                      ),
-                    ),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isSelected ? color : Colors.transparent,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 10),
+            Text(
+              count.toString(),
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.6,
+                height: 1.05,
+                color: isSelected ? color : ink,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(height: 3),
             Text(
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 11,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected
-                    ? color
-                    : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                letterSpacing: -0.1,
+                color: isSelected ? ink : muted,
               ),
             ),
           ],
