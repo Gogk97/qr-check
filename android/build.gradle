@@ -6,8 +6,8 @@ allprojects {
 }
 
 rootProject.ext.flutter = [
-    compileSdkVersion: 34,
-    targetSdkVersion: 34,
+    compileSdkVersion: 36,
+    targetSdkVersion: 36,
     minSdkVersion: 23,
 ]
 
@@ -20,7 +20,8 @@ subprojects { p ->
     p.afterEvaluate {
         if (p.hasProperty('android')) {
             p.android {
-                compileSdkVersion 34
+                // Wajib 36: Play menolak app baru yang targetSdk < 36 sejak 31 Agu 2026.
+                compileSdkVersion 36
             }
         }
     }
