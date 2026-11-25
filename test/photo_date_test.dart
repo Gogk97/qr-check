@@ -72,23 +72,23 @@ void main() {
 
   group('Export memakai tanggal foto', () {
     test('CSV menulis tanggal foto, bukan tanggal pindai', () {
-      final csv = ExportService.buildCsv([
+      final csv = ExportService.buildCsv(ExportService.reportEntries([
         _item(
           addedAt: DateTime(2026, 11, 25, 9, 0),
           photoDate: DateTime(2024, 3, 14, 16, 20),
         ),
-      ]);
+      ]));
       expect(csv, contains('2024-03-14'));
       expect(csv, isNot(contains('2026-11-25')));
     });
 
     test('Excel XML juga memakai tanggal foto', () {
-      final xml = ExportService.buildExcelXml([
+      final xml = ExportService.buildExcelXml(ExportService.reportEntries([
         _item(
           addedAt: DateTime(2026, 11, 25, 9, 0),
           photoDate: DateTime(2024, 3, 14, 16, 20),
         ),
-      ]);
+      ]));
       expect(xml, contains('2024-03-14'));
     });
   });

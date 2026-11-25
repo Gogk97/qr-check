@@ -31,7 +31,7 @@ class _ReportScreenState extends State<ReportScreen> {
   static final DateFormat _dayFmt = DateFormat('d MMM', 'id_ID');
   static final DateFormat _fullFmt = DateFormat('d MMM yyyy', 'id_ID');
 
-  late final List<ScannedItem> _all;
+  late final List<ReportEntry> _all;
   _RangePreset _preset = _RangePreset.d30;
   DateTimeRange? _customRange;
   RangeValues? _priceRange;
@@ -40,14 +40,12 @@ class _ReportScreenState extends State<ReportScreen> {
   @override
   void initState() {
     super.initState();
-    _all = ExportService.reportable(widget.items);
+    _all = ExportService.reportEntries(widget.items);
   }
 
   double get _maxAmount {
     if (_all.isEmpty) return 0;
-    return _all
-        .map((e) => e.qrisDetails?.amount ?? 0)
-        .reduce((a, b) => a > b ? a : b);
+    return _all.map((e) => e.amount).reduce((a, b) => a > b ? a : b);
   }
 
   RangeValues get _effectivePriceRange =>
@@ -75,17 +73,16 @@ class _ReportScreenState extends State<ReportScreen> {
     }
   }
 
-  List<ScannedItem> get _filtered {
+  List<ReportEntry> get _filtered {
     final range = _effectiveDateRange;
     final price = _effectivePriceRange;
 
-    return _all.where((item) {
-      final amount = item.qrisDetails?.amount ?? 0;
-      if (amount < price.start || amount > price.end) return false;
+    return _all.where((entry) {
+      if (entry.amount < price.start || entry.amount > price.end) return false;
       if (range != null) {
         final endOfDay = DateTime(
             range.end.year, range.end.month, range.end.day, 23, 59, 59);
-        if (item.reportDate.isBefore(range.start) || item.reportDate.isAfter(endOfDay)) {
+        if (entry.date.isBefore(range.start) || entry.date.isAfter(endOfDay)) {
           return false;
         }
       }
@@ -93,23 +90,20 @@ class _ReportScreenState extends State<ReportScreen> {
     }).toList();
   }
 
-  double get _total => _filtered.fold(
-        0,
-        (sum, e) => sum + (e.qrisDetails?.amount ?? 0),
-      );
+  double get _total => ExportService.totalOf(_filtered);
 
   // ---------------------------------------------------------------- chart
 
   /// Bucket nominal per hari (atau per minggu untuk rentang panjang).
-  List<MapEntry<DateTime, double>> _chartPoints(List<ScannedItem> items) {
-    if (items.isEmpty) return const [];
+  List<MapEntry<DateTime, double>> _chartPoints(List<ReportEntry> entries) {
+    if (entries.isEmpty) return const [];
 
     final range = _effectiveDateRange;
     final weekly = _preset == _RangePreset.d90 || _preset == _RangePreset.all;
 
     final buckets = <DateTime, double>{};
-    for (final item in items) {
-      final d = item.reportDate;
+    for (final entry in entries) {
+      final d = entry.date;
       DateTime key;
       if (weekly) {
         // Awal minggu (Senin).
@@ -118,7 +112,7 @@ class _ReportScreenState extends State<ReportScreen> {
       } else {
         key = DateTime(d.year, d.month, d.day);
       }
-      buckets[key] = (buckets[key] ?? 0) + (item.qrisDetails?.amount ?? 0);
+      buckets[key] = (buckets[key] ?? 0) + entry.amount;
     }
 
     final sortedKeys = buckets.keys.toList()..sort();
@@ -161,8 +155,8 @@ class _ReportScreenState extends State<ReportScreen> {
     }
   }
 
-  Future<void> _export(List<ScannedItem> items) async {
-    if (items.isEmpty) return;
+  Future<void> _export(List<ReportEntry> entries) async {
+    if (entries.isEmpty) return;
 
     final format = await showModalBottomSheet<String>(
       context: context,
@@ -196,7 +190,7 @@ class _ReportScreenState extends State<ReportScreen> {
                 ),
               ),
               Text(
-                'Ekspor ${items.length} transaksi',
+                'Ekspor ${entries.length} transaksi',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
@@ -206,7 +200,7 @@ class _ReportScreenState extends State<ReportScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                ExportService.summary(items),
+                ExportService.summary(entries),
                 style: TextStyle(fontSize: 12.5, color: AppTheme.mutedColor(isDark)),
               ),
               const SizedBox(height: 16),
@@ -238,9 +232,9 @@ class _ReportScreenState extends State<ReportScreen> {
     setState(() => _exporting = true);
     try {
       if (format == 'csv') {
-        await ExportService.shareCsv(items);
+        await ExportService.shareCsv(entries);
       } else {
-        await ExportService.shareExcel(items);
+        await ExportService.shareExcel(entries);
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -328,6 +322,7 @@ class _ReportScreenState extends State<ReportScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final filtered = _filtered;
     final points = _chartPoints(filtered);
+    final dupeStats = ExportService.duplicateStats(filtered);
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -380,6 +375,10 @@ class _ReportScreenState extends State<ReportScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 28),
                 children: [
                   _buildFilters(isDark),
+                  if (dupeStats.groups > 0) ...[
+                    const SizedBox(height: 10),
+                    _buildDuplicateNotice(isDark, dupeStats),
+                  ],
                   const SizedBox(height: 12),
                   _buildSummary(isDark, filtered),
                   const SizedBox(height: 12),
@@ -442,7 +441,7 @@ class _ReportScreenState extends State<ReportScreen> {
                       ),
                     )
                   else
-                    ...filtered.map((item) => _transactionTile(isDark, item)),
+                    ...filtered.map((entry) => _transactionTile(isDark, entry)),
                   const SizedBox(height: 16),
                   ElevatedButton.icon(
                     onPressed: filtered.isEmpty || _exporting
@@ -645,9 +644,9 @@ class _ReportScreenState extends State<ReportScreen> {
     );
   }
 
-  Widget _buildSummary(bool isDark, List<ScannedItem> items) {
+  Widget _buildSummary(bool isDark, List<ReportEntry> entries) {
     final total = _total;
-    final count = items.length;
+    final count = entries.length;
     final avg = count == 0 ? 0.0 : total / count;
 
     return Row(
@@ -887,7 +886,45 @@ class _ReportScreenState extends State<ReportScreen> {
     );
   }
 
-  Widget _transactionTile(bool isDark, ScannedItem item) {
+  /// Info bahwa beberapa QRIS punya lebih dari satu foto (tidak dihitung dobel).
+  Widget _buildDuplicateNotice(
+      bool isDark, ({int groups, int extraPhotos}) stats) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.qrAmber.withOpacity(isDark ? 0.12 : 0.10),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: AppTheme.qrAmber.withOpacity(0.38)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(Icons.filter_none_rounded,
+                size: 15, color: AppTheme.qrAmber),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              '${stats.groups} QRIS punya lebih dari 1 foto '
+              '(${stats.extraPhotos} foto tambahan). Total & chart hanya '
+              'menghitung 1 per QRIS.',
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.inkColor(isDark),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _transactionTile(bool isDark, ReportEntry entry) {
+    final item = entry.item;
     final d = item.qrisDetails;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -927,12 +964,40 @@ class _ReportScreenState extends State<ReportScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  '${_fullFmt.format(item.reportDate)} · ${d?.displayAcquirer ?? '-'}',
-                  style: TextStyle(
-                      fontSize: 10.5, color: AppTheme.mutedColor(isDark)),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        '${_fullFmt.format(entry.date)} · ${d?.displayAcquirer ?? '-'}',
+                        style: TextStyle(
+                            fontSize: 10.5, color: AppTheme.mutedColor(isDark)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (entry.isDuplicate) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppTheme.qrAmber
+                              .withOpacity(isDark ? 0.22 : 0.16),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          '${entry.photoCount} foto',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            color: isDark
+                                ? const Color(0xFFFBBF24)
+                                : const Color(0xFF8A5A00),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
