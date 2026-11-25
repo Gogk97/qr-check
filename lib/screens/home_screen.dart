@@ -22,6 +22,7 @@ import '../widgets/scanned_item_card.dart';
 import '../widgets/stats_card.dart';
 import 'favorites_screen.dart';
 import 'login_screen.dart';
+import 'report_screen.dart';
 import '../utils/app_log.dart';
 
 enum FilterMode {
@@ -30,6 +31,9 @@ enum FilterMode {
   regularQrOnly,
   all,
 }
+
+/// Urutan daftar di Beranda.
+enum SortMode { newest, oldest, amountHigh, amountLow, nameAz }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -53,6 +57,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final Stopwatch _scanStopwatch = Stopwatch();
 
   FilterMode _filterMode = FilterMode.qrisOnly; // Default: Hanya QRIS sesuai permintaan user
+  SortMode _sortMode = SortMode.newest;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   bool get shouldShowDeleteToolbar => _items.isNotEmpty;
 
@@ -80,6 +87,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -168,6 +176,44 @@ class _HomeScreenState extends State<HomeScreen> {
             .where((i) => i.isQRIS && i.qrisDetails?.displayAcquirer == _selectedAcquirerFilter)
             .toList();
       }
+    }
+
+    // Pencarian: merchant, kota, nama file, atau isi payload QR.
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      list = list.where((i) {
+        final merchant = (i.qrisDetails?.merchantName ?? '').toLowerCase();
+        final city = (i.qrisDetails?.merchantCity ?? '').toLowerCase();
+        final name = i.fileName.toLowerCase();
+        final raw = (i.rawContent ?? '').toLowerCase();
+        return merchant.contains(q) ||
+            city.contains(q) ||
+            name.contains(q) ||
+            raw.contains(q);
+      }).toList();
+    }
+
+    // Urutan
+    switch (_sortMode) {
+      case SortMode.newest:
+        list.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+        break;
+      case SortMode.oldest:
+        list.sort((a, b) => a.addedAt.compareTo(b.addedAt));
+        break;
+      case SortMode.amountHigh:
+        list.sort((a, b) => (b.qrisDetails?.amount ?? 0)
+            .compareTo(a.qrisDetails?.amount ?? 0));
+        break;
+      case SortMode.amountLow:
+        list.sort((a, b) => (a.qrisDetails?.amount ?? 0)
+            .compareTo(b.qrisDetails?.amount ?? 0));
+        break;
+      case SortMode.nameAz:
+        list.sort((a, b) => (a.qrisDetails?.merchantName ?? a.fileName)
+            .toLowerCase()
+            .compareTo((b.qrisDetails?.merchantName ?? b.fileName).toLowerCase()));
+        break;
     }
 
     return list;
@@ -399,8 +445,23 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() {});
   }
 
-  /// Upsell khusus fitur Favorit (dipakai saat pengguna gratis mengetuk bintang).
-  Future<void> _showFavoritesProSheet() async {
+  /// Upsell khusus fitur Favorit.
+  Future<void> _showFavoritesProSheet() => _showProSheet(
+        title: 'Favorit khusus PRO',
+        subtitle: 'Simpan QRIS & QR penting dalam satu halaman',
+        features: const [
+          (Icons.star_rounded, 'Tandai QRIS & QR favorit'),
+          (Icons.folder_special_rounded, 'Halaman Favorit terpisah + pencarian'),
+          (Icons.bolt_rounded, 'Hapus massal tanpa batas & bebas iklan'),
+        ],
+      );
+
+  /// Upsell generik untuk fitur PRO (dipakai Favorit, Laporan, Rename).
+  Future<void> _showProSheet({
+    required String title,
+    required String subtitle,
+    required List<(IconData, String)> features,
+  }) async {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bought = await showModalBottomSheet<bool>(
       context: context,
@@ -442,7 +503,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: AppTheme.qrAmber.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.star_rounded, color: AppTheme.qrAmber, size: 24),
+                    child: const Icon(Icons.workspace_premium_rounded,
+                        color: AppTheme.qrAmber, size: 24),
                   ),
                   const SizedBox(width: 13),
                   Expanded(
@@ -450,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Favorit khusus PRO',
+                          title,
                           style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.w800,
@@ -460,15 +522,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Simpan QRIS & QR penting dalam satu halaman',
-                          style: TextStyle(fontSize: 12, color: AppTheme.mutedColor(isDark)),
+                          subtitle,
+                          style: TextStyle(
+                              fontSize: 12, color: AppTheme.mutedColor(isDark)),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
                     onPressed: () => Navigator.of(ctx).pop(false),
-                    icon: Icon(Icons.close_rounded, size: 19, color: AppTheme.mutedColor(isDark)),
+                    icon: Icon(Icons.close_rounded,
+                        size: 19, color: AppTheme.mutedColor(isDark)),
                     tooltip: 'Tutup',
                   ),
                 ],
@@ -483,9 +547,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 child: Column(
                   children: [
-                    _buildProFeatureRow(Icons.star_rounded, 'Tandai QRIS & QR favorit'),
-                    _buildProFeatureRow(Icons.folder_special_rounded, 'Halaman Favorit terpisah + pencarian'),
-                    _buildProFeatureRow(Icons.bolt_rounded, 'Hapus massal tanpa batas & bebas iklan'),
+                    for (final f in features)
+                      _buildProFeatureRow(f.$1, f.$2),
                   ],
                 ),
               ),
@@ -494,7 +557,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.qrisGreenDark,
                   minimumSize: const Size(double.infinity, 50),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape:
+                      RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
                 onPressed: () => Navigator.of(ctx).pop(true),
                 child: const Text(
@@ -507,7 +571,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 onPressed: () => Navigator.of(ctx).pop(false),
                 child: Text(
                   'Nanti saja',
-                  style: TextStyle(color: AppTheme.mutedColor(isDark), fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                      color: AppTheme.mutedColor(isDark),
+                      fontWeight: FontWeight.w600),
                 ),
               ),
             ],
@@ -519,6 +585,89 @@ class _HomeScreenState extends State<HomeScreen> {
     if (bought == true && mounted) {
       final purchased = await MonetizationService.openProPurchase(context);
       if (purchased && mounted) setState(() {});
+    }
+  }
+
+  /// Buka halaman Laporan QRIS (PRO).
+  Future<void> _openReport() async {
+    final isPro = await MonetizationService.isProUser();
+    if (!isPro) {
+      if (mounted) {
+        await _showProSheet(
+          title: 'Laporan khusus PRO',
+          subtitle: 'Grafik nominal, filter tanggal & harga, ekspor CSV/Excel',
+          features: const [
+            (Icons.insights_rounded, 'Grafik nominal per hari & minggu'),
+            (Icons.filter_alt_rounded, 'Filter tanggal dan rentang harga'),
+            (Icons.download_rounded, 'Ekspor CSV & Excel siap pakai'),
+          ],
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    await ReportScreen.open(context, items: _items);
+  }
+
+  /// Rapikan nama file QRIS menjadi mudah dibaca (PRO).
+  Future<void> _autoRenameAll() async {
+    final isPro = await MonetizationService.isProUser();
+    if (!isPro) {
+      if (mounted) {
+        await _showProSheet(
+          title: 'Rapikan nama file (PRO)',
+          subtitle: 'Ubah nama file menjadi mudah dicari',
+          features: const [
+            (Icons.drive_file_rename_outline_rounded,
+                'Nama dari merchant + nominal + tanggal'),
+            (Icons.search_rounded, 'Mudah ditemukan di galeri & file manager'),
+            (Icons.bolt_rounded, 'Sekali tekan untuk semua QRIS'),
+          ],
+        );
+      }
+      return;
+    }
+
+    final targets = _items.where((e) => e.isQRIS).toList();
+    if (targets.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Belum ada QRIS untuk dirapikan.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    var renamed = 0;
+    for (final item in targets) {
+      final before = item.file.path;
+      final after = await ImageStorageService.autoRename(item);
+      if (after.path != before) {
+        item.file = after;
+        item.fileName = after.uri.pathSegments.last;
+        renamed++;
+      }
+    }
+
+    if (renamed > 0) {
+      await _saveItemsToStorage();
+      if (mounted) setState(() {});
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            renamed > 0
+                ? '🏷️ $renamed file dirapikan berdasarkan isi QRIS.'
+                : 'Semua nama file sudah rapi.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -986,6 +1135,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     backgroundColor: AppTheme.qrAmber,
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    await _autoRenameAll();
+                  },
+                  icon: Icon(Icons.drive_file_rename_outline_rounded,
+                      color: AppTheme.inkColor(isDark), size: 18),
+                  label: Text(
+                    'Rapikan Nama File (PRO)',
+                    style: TextStyle(
+                        color: AppTheme.inkColor(isDark),
+                        fontWeight: FontWeight.w600),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: AppTheme.borderColor(isDark)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -1495,6 +1665,28 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
+          // Laporan QRIS (fitur PRO)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _openReport,
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
+                ),
+                child: Icon(
+                  Icons.insights_rounded,
+                  size: 19,
+                  color: AppTheme.inkColor(isDark),
+                ),
+              ),
+            ),
+          ),
           // Favorit (fitur PRO)
           Padding(
             padding: const EdgeInsets.only(right: 8),
@@ -1886,6 +2078,101 @@ class _HomeScreenState extends State<HomeScreen> {
                             );
                           }),
                         ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Pencarian & urutan (gratis)
+            if (_items.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: (v) => setState(() => _searchQuery = v),
+                        textInputAction: TextInputAction.search,
+                        style: TextStyle(
+                            fontSize: 13, color: AppTheme.inkColor(isDark)),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          hintText: 'Cari merchant, kota, atau nama file',
+                          hintStyle: TextStyle(
+                              fontSize: 12.5,
+                              color: AppTheme.mutedColor(isDark)),
+                          prefixIcon: Icon(Icons.search_rounded,
+                              size: 18, color: AppTheme.mutedColor(isDark)),
+                          suffixIcon: _searchQuery.isEmpty
+                              ? null
+                              : IconButton(
+                                  icon: Icon(Icons.close_rounded,
+                                      size: 16,
+                                      color: AppTheme.mutedColor(isDark)),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() => _searchQuery = '');
+                                  },
+                                ),
+                          filled: true,
+                          fillColor: AppTheme.subtleBg(isDark),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 11),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(11),
+                            borderSide:
+                                BorderSide(color: AppTheme.borderColor(isDark)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(11),
+                            borderSide:
+                                BorderSide(color: AppTheme.borderColor(isDark)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(11),
+                            borderSide: const BorderSide(
+                                color: AppTheme.qrisGreen, width: 1.4),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    PopupMenuButton<SortMode>(
+                      tooltip: 'Urutkan',
+                      initialValue: _sortMode,
+                      onSelected: (v) => setState(() => _sortMode = v),
+                      itemBuilder: (ctx) => const [
+                        PopupMenuItem(
+                            value: SortMode.newest, child: Text('Terbaru')),
+                        PopupMenuItem(
+                            value: SortMode.oldest, child: Text('Terlama')),
+                        PopupMenuItem(
+                            value: SortMode.amountHigh,
+                            child: Text('Nominal tertinggi')),
+                        PopupMenuItem(
+                            value: SortMode.amountLow,
+                            child: Text('Nominal terendah')),
+                        PopupMenuItem(
+                            value: SortMode.nameAz, child: Text('Nama A–Z')),
+                      ],
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: AppTheme.subtleBg(isDark),
+                          borderRadius: BorderRadius.circular(11),
+                          border:
+                              Border.all(color: AppTheme.borderColor(isDark)),
+                        ),
+                        child: Icon(
+                          Icons.sort_rounded,
+                          size: 19,
+                          color: _sortMode == SortMode.newest
+                              ? AppTheme.mutedColor(isDark)
+                              : AppTheme.primary,
+                        ),
                       ),
                     ),
                   ],

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
@@ -9,6 +10,8 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Nama bulan/hari berbahasa Indonesia untuk laporan & filter tanggal.
+  await initializeDateFormatting('id_ID', null);
   // Batasi cache gambar di RAM agar tidak membengkak saat galeri besar.
   // Thumbnail grid memakai cacheWidth, jadi 80 MB sudah sangat cukup.
   PaintingBinding.instance.imageCache.maximumSizeBytes = 80 << 20; // 80 MB

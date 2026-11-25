@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/scanned_item.dart';
@@ -112,6 +113,64 @@ class ImageStorageService {
       _compressInIsolate,
       _CompressJob(bytes: bytes, maxDimension: maxSide, quality: quality),
     );
+  }
+
+  /// Ganti nama file item menjadi nama yang mudah dibaca dari isi QRIS,
+  /// mis. `2026-11-19_Kopi_Senja_Rp25000_BCA.jpg`.
+  ///
+  /// Mengembalikan [File] baru; bila gagal, file lama dikembalikan.
+  static Future<File> autoRename(ScannedItem item) async {
+    try {
+      final source = item.file;
+      if (!await source.exists()) return source;
+
+      final dir = await storageDir();
+      if (!source.path.startsWith(dir.path)) return source;
+
+      final d = item.qrisDetails;
+      final date = DateFormat('yyyy-MM-dd').format(item.addedAt);
+      final merchant = _slug(d?.merchantName ?? 'QRIS');
+      final amount = (d?.amount ?? 0) > 0
+          ? 'Rp${(d!.amount!).toStringAsFixed(0)}'
+          : null;
+      final acquirer = _slug(d?.displayAcquirer ?? '');
+
+      final parts = <String>[
+        date,
+        merchant,
+        if (amount != null) amount,
+        if (acquirer.isNotEmpty) acquirer,
+      ];
+      var base = parts.join('_');
+      if (base.length > 90) base = base.substring(0, 90);
+
+      final ext = _safeExtension(source.path);
+      var target = File('${dir.path}/$base.$ext');
+      var counter = 2;
+      while (await target.exists() && target.path != source.path) {
+        target = File('${dir.path}/${base}_$counter.$ext');
+        counter++;
+      }
+
+      if (target.path == source.path) return source;
+
+      final renamed = await source.rename(target.path);
+      AppLog.d('🏷️ Rename: ${source.uri.pathSegments.last} → ${target.uri.pathSegments.last}');
+      return renamed;
+    } catch (e) {
+      AppLog.d('⚠️ Gagal rename file: $e');
+      return item.file;
+    }
+  }
+
+  static String _slug(String input) {
+    final cleaned = input
+        .trim()
+        .replaceAll(RegExp(r'[^\w\s\-]'), '')
+        .replaceAll(RegExp(r'\s+'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    if (cleaned.isEmpty) return 'QRIS';
+    return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
   }
 
   /// Total ukuran folder gambar (byte).

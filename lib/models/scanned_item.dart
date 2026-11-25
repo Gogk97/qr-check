@@ -91,8 +91,8 @@ class QRISDetails {
 
 class ScannedItem {
   final String id;
-  final File file;
-  final String fileName;
+  File file;
+  String fileName;
   final String originalFileName;
   final String? assetId;
   final int fileSize;
