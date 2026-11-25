@@ -97,6 +97,13 @@ class ScannedItem {
   final String? assetId;
   final int fileSize;
   final DateTime addedAt;
+
+  /// Tanggal foto diambil, dibaca dari metadata galeri (MediaStore/EXIF).
+  /// `null` untuk foto lama yang dipindai sebelum fitur ini ada.
+  DateTime? photoDate;
+
+  /// Tanggal yang dipakai untuk laporan: tanggal foto, fallback ke waktu pindai.
+  DateTime get reportDate => photoDate ?? addedAt;
   bool isProcessing;
   bool hasQR;
   bool isQRIS;
@@ -117,6 +124,7 @@ class ScannedItem {
     this.assetId,
     required this.fileSize,
     required this.addedAt,
+    this.photoDate,
     this.isProcessing = true,
     this.hasQR = false,
     this.isQRIS = false,
@@ -136,6 +144,7 @@ class ScannedItem {
         'assetId': assetId,
         'fileSize': fileSize,
         'addedAt': addedAt.toIso8601String(),
+        'photoDate': photoDate?.toIso8601String(),
         'isProcessing': isProcessing,
         'hasQR': hasQR,
         'isQRIS': isQRIS,
@@ -154,6 +163,9 @@ class ScannedItem {
         assetId: json['assetId'],
         fileSize: json['fileSize'] ?? 0,
         addedAt: json['addedAt'] != null ? DateTime.parse(json['addedAt']) : DateTime.now(),
+        photoDate: json['photoDate'] != null
+            ? DateTime.tryParse(json['photoDate'])
+            : null,
         isProcessing: json['isProcessing'] ?? false,
         hasQR: json['hasQR'] ?? false,
         isQRIS: json['isQRIS'] ?? false,

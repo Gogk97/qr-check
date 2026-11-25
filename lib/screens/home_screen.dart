@@ -126,6 +126,8 @@ class _HomeScreenState extends State<HomeScreen> {
           await ImageStorageService.purgeOrphanFiles(
             _items.map((e) => e.file.path).toSet(),
           );
+          // Isi tanggal foto untuk item lama yang belum punya (background).
+          _backfillPhotoDates();
         }
       }
     } catch (e) {
@@ -413,6 +415,37 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ------------------------------------------------------------------ Favorit
 
+  /// Lengkapi `photoDate` item lama dari metadata galeri (sekali jalan).
+  ///
+  /// Item yang dipindai sebelum fitur tanggal-foto ada hanya punya waktu pindai.
+  /// Dengan `assetId` kita bisa mengambil tanggal asli dari MediaStore.
+  Future<void> _backfillPhotoDates() async {
+    final targets = _items
+        .where((e) => e.photoDate == null && (e.assetId ?? '').isNotEmpty)
+        .toList();
+    if (targets.isEmpty) return;
+
+    var updated = 0;
+    for (final item in targets) {
+      try {
+        final asset = await AssetEntity.fromId(item.assetId!);
+        final created = asset?.createDateTime;
+        if (created != null) {
+          item.photoDate = created;
+          updated++;
+        }
+      } catch (_) {
+        // Asset mungkin sudah dihapus dari galeri — biarkan fallback ke addedAt.
+      }
+    }
+
+    if (updated > 0) {
+      AppLog.d('📅 Backfill tanggal foto: $updated item');
+      await _saveItemsToStorage();
+      if (mounted) setState(() {});
+    }
+  }
+
   int get _favoriteCount => _items.where((e) => e.isFavorite).length;
 
   /// Tandai / lepas favorit. Khusus PRO; pengguna gratis diarahkan ke upsell.
@@ -697,6 +730,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required String originalName,
     required String? assetId,
     required int fileSize,
+    DateTime? photoDate,
   }) async {
     final id = 'scan_${DateTime.now().microsecondsSinceEpoch}_${file.path.hashCode}';
     var result = await _scannerService.scanImage(file, id: id);
@@ -711,6 +745,7 @@ class _HomeScreenState extends State<HomeScreen> {
         assetId: assetId,
         fileSize: result.fileSize,
         addedAt: result.addedAt,
+        photoDate: photoDate,
         isProcessing: false,
         hasQR: result.hasQR,
         isQRIS: result.isQRIS,
@@ -764,6 +799,7 @@ class _HomeScreenState extends State<HomeScreen> {
               originalName: originalName,
               assetId: entity.id,
               fileSize: fileSize,
+              photoDate: entity.createDateTime,
             );
 
             if (item != null) _items.insert(0, item);
@@ -875,6 +911,7 @@ class _HomeScreenState extends State<HomeScreen> {
             originalName: originalName,
             assetId: assetId,
             fileSize: fileSize,
+            photoDate: await file.lastModified(),
           );
 
           if (item != null) _items.insert(0, item);

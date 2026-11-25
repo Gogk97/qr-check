@@ -49,8 +49,8 @@ class ExportService {
     return items.map((item) {
       final d = item.qrisDetails;
       return [
-        _dateFmt.format(item.addedAt),
-        _timeFmt.format(item.addedAt),
+        _dateFmt.format(item.reportDate),
+        _timeFmt.format(item.reportDate),
         d?.merchantName ?? '',
         d?.merchantCity ?? '',
         d?.postalCode ?? '',

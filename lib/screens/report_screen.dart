@@ -85,7 +85,7 @@ class _ReportScreenState extends State<ReportScreen> {
       if (range != null) {
         final endOfDay = DateTime(
             range.end.year, range.end.month, range.end.day, 23, 59, 59);
-        if (item.addedAt.isBefore(range.start) || item.addedAt.isAfter(endOfDay)) {
+        if (item.reportDate.isBefore(range.start) || item.reportDate.isAfter(endOfDay)) {
           return false;
         }
       }
@@ -109,7 +109,7 @@ class _ReportScreenState extends State<ReportScreen> {
 
     final buckets = <DateTime, double>{};
     for (final item in items) {
-      final d = item.addedAt;
+      final d = item.reportDate;
       DateTime key;
       if (weekly) {
         // Awal minggu (Senin).
@@ -928,7 +928,7 @@ class _ReportScreenState extends State<ReportScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${_fullFmt.format(item.addedAt)} · ${d?.displayAcquirer ?? '-'}',
+                  '${_fullFmt.format(item.reportDate)} · ${d?.displayAcquirer ?? '-'}',
                   style: TextStyle(
                       fontSize: 10.5, color: AppTheme.mutedColor(isDark)),
                   maxLines: 1,
