@@ -9,6 +9,10 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Batasi cache gambar di RAM agar tidak membengkak saat galeri besar.
+  // Thumbnail grid memakai cacheWidth, jadi 80 MB sudah sangat cukup.
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 80 << 20; // 80 MB
+  PaintingBinding.instance.imageCache.maximumSize = 300; // maks. 300 gambar
   await SupabaseService.initialize();
   // AdMob diinisialisasi tanpa di-await: jangan menunda startup aplikasi.
   // Preload rewarded & interstitial berjalan di latar belakang.

@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +10,7 @@ import '../models/scanned_item.dart';
 import '../services/ad_service.dart';
 import '../services/auth_service.dart';
 import '../services/image_scanner_service.dart';
+import '../services/image_storage_service.dart';
 import '../services/monetization_service.dart';
 import '../services/notification_service.dart';
 import '../services/quota_service.dart';
@@ -111,6 +111,11 @@ class _HomeScreenState extends State<HomeScreen> {
             _items.clear();
             _items.addAll(loaded);
           });
+          // Bersihkan item kedaluwarsa + file yatim saat aplikasi dibuka.
+          await _applyRetention(notify: true);
+          await ImageStorageService.purgeOrphanFiles(
+            _items.map((e) => e.file.path).toSet(),
+          );
         }
       }
     } catch (e) {
@@ -120,6 +125,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _saveItemsToStorage() async {
     try {
+      // Terapkan retensi lebih dulu agar item kedaluwarsa tidak ikut tersimpan.
+      await _applyRetention(notify: false);
       final prefs = await SharedPreferences.getInstance();
       final data = _items.map((item) => item.toJson()).toList();
       await prefs.setString('saved_scanned_items_v1', jsonEncode(data));
@@ -318,23 +325,45 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// Menyalin foto ke storage aplikasi dalam versi **teroptimasi**
+  /// (maks. 1280 px, JPEG q88). QR sudah diparse menjadi teks, jadi foto penuh
+  /// tidak perlu diduplikasi — hemat 70–85% ruang penyimpanan.
   Future<File> _saveFileToPermanentStorage(File sourceFile) async {
+    return ImageStorageService.saveOptimized(sourceFile);
+  }
+
+  /// Terapkan kebijakan retensi penyimpanan (30 hari / maks. 300 item).
+  /// File dari item yang dibuang ikut dihapus agar ruang benar-benar kembali.
+  Future<void> _applyRetention({bool notify = true}) async {
+    if (_items.isEmpty) return;
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final imagesDir = Directory('${appDir.path}/qris_permanently_saved_images');
-      if (!await imagesDir.exists()) {
-        await imagesDir.create(recursive: true);
+      final result = await ImageStorageService.applyRetention(_items);
+      if (!result.didRemove) return;
+
+      if (mounted) {
+        setState(() {
+          _items
+            ..clear()
+            ..addAll(result.items);
+        });
+        if (notify) {
+          final mb = (result.bytesFreed / (1024 * 1024)).toStringAsFixed(1);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '🧹 ${result.removed} item lama dibersihkan otomatis (hemat $mb MB).',
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } else {
+        _items
+          ..clear()
+          ..addAll(result.items);
       }
-      if (sourceFile.path.startsWith(imagesDir.path)) {
-        return sourceFile;
-      }
-      final fileName = '${DateTime.now().microsecondsSinceEpoch}_${sourceFile.uri.pathSegments.last.replaceAll(RegExp(r'[^a-zA-Z0-9_\.]'), '_')}';
-      final targetPath = '${imagesDir.path}/$fileName';
-      final savedFile = await sourceFile.copy(targetPath);
-      return savedFile;
     } catch (e) {
-      AppLog.d('Error copying file to permanent storage: $e');
-      return sourceFile;
+      AppLog.d('⚠️ Retensi penyimpanan gagal: $e');
     }
   }
 
