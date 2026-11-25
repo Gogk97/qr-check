@@ -57,6 +57,8 @@ dependencies:
   fl_chart: 0.69.2
   # Sesi auth disimpan di Keystore/Keychain, bukan SharedPreferences plaintext.
   flutter_secure_storage: ^10.3.4
+  archive: ^4.0.9
+  file_picker: ^8.0.0
 
 dev_dependencies:
   flutter_test:

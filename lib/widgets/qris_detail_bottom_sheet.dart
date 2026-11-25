@@ -4,7 +4,9 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/scanned_item.dart';
+import '../services/qris_audit_service.dart';
 import '../theme/app_theme.dart';
+import 'qris_audit_card.dart';
 
 class QRISDetailBottomSheet extends StatelessWidget {
   final ScannedItem item;
@@ -423,6 +425,14 @@ class QRISDetailBottomSheet extends StatelessWidget {
                     ),
 
                     const SizedBox(height: 14),
+
+                    // Audit keamanan payload QRIS (diproses lokal).
+                    if (item.isQRIS) ...[
+                      QrisAuditCard(
+                        result: QrisAuditService.audit(item),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
 
                     // Detail Items Ledger Box
                     Container(

@@ -17,6 +17,7 @@ import '../services/image_scanner_service.dart';
 import '../services/image_storage_service.dart';
 import '../services/monetization_service.dart';
 import '../services/notification_service.dart';
+import '../services/qris_audit_service.dart';
 import '../services/quota_service.dart';
 import '../services/share_intent_service.dart';
 import '../theme/app_theme.dart';
@@ -24,6 +25,8 @@ import '../widgets/ad_banner.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/scanned_item_card.dart';
 import '../widgets/stats_card.dart';
+import 'audit_screen.dart';
+import 'backup_screen.dart';
 import 'favorites_screen.dart';
 import 'login_screen.dart';
 import 'onboarding_screen.dart';
@@ -472,6 +475,30 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       AppLog.d('⚠️ Retensi penyimpanan gagal: $e');
     }
+  }
+
+  // ------------------------------------------------------------------ Audit
+
+  /// Jumlah QRIS yang perlu dicek (skor audit di bawah ambang aman).
+  int get _needsReviewCount => QrisAuditService.countNeedsReview(_items);
+
+  Future<void> _openAudit() async {
+    await AuditScreen.open(context, _items);
+    if (mounted) setState(() {});
+  }
+
+  // --------------------------------------------------------- Backup & pulih
+
+  Future<void> _openBackup() async {
+    await BackupScreen.open(
+      context,
+      items: _items,
+      onRestored: (restored) async {
+        _items.insertAll(0, restored);
+        await _saveItemsToStorage();
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   // --------------------------------------------------------------- Duplikat
@@ -1285,6 +1312,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     backgroundColor: AppTheme.qrAmber,
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    await _openBackup();
+                  },
+                  icon: Icon(Icons.cloud_sync_outlined,
+                      color: AppTheme.inkColor(isDark), size: 18),
+                  label: Text(
+                    'Backup & Pulihkan',
+                    style: TextStyle(
+                        color: AppTheme.inkColor(isDark),
+                        fontWeight: FontWeight.w600),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: AppTheme.borderColor(isDark)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -2488,6 +2536,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     _takePhotoWithCamera();
                   } else if (value == 'duplicates') {
                     _openDuplicateCleaner();
+                  } else if (value == 'audit') {
+                    _openAudit();
                   }
                 },
                 itemBuilder: (context) => [
@@ -2508,6 +2558,37 @@ class _HomeScreenState extends State<HomeScreen> {
                         Icon(Icons.camera_alt_outlined, size: 18),
                         SizedBox(width: 10),
                         Text('Ambil Foto Kamera'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'audit',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.verified_user_outlined, size: 18),
+                        const SizedBox(width: 10),
+                        const Text('Audit Semua QRIS'),
+                        if (_needsReviewCount > 0) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppTheme.qrAmber.withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '$_needsReviewCount',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: isDark
+                                    ? const Color(0xFFFBBF24)
+                                    : const Color(0xFF8A5A00),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
