@@ -29,7 +29,6 @@ enum FilterMode {
   allQr,
   regularQrOnly,
   all,
-  noQrOnly,
 }
 
 class HomeScreen extends StatefulWidget {
@@ -55,8 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   FilterMode _filterMode = FilterMode.qrisOnly; // Default: Hanya QRIS sesuai permintaan user
 
-  bool get shouldShowDeleteToolbar =>
-      _items.isNotEmpty && _filterMode != FilterMode.noQrOnly;
+  bool get shouldShowDeleteToolbar => _items.isNotEmpty;
 
   String _selectedAcquirerFilter = 'ALL';
 
@@ -104,6 +102,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final List list = jsonDecode(rawData);
         final loaded = list
             .map((json) => ScannedItem.fromJson(json))
+            // Buang entri lama yang bukan QR: mulai sekarang hanya QR/QRIS disimpan.
+            .where((item) => item.hasQR || item.isQRIS)
             .where((item) =>
                 (item.assetId != null && item.assetId!.isNotEmpty) ||
                 item.file.existsSync())
@@ -141,7 +141,6 @@ class _HomeScreenState extends State<HomeScreen> {
   int get qrisCount => _items.where((i) => i.isQRIS).length;
   int get regularQrCount => _items.where((i) => i.hasQR && !i.isQRIS).length;
   int get allQrCount => _items.where((i) => i.hasQR).length;
-  int get noQrCount => _items.where((i) => !i.hasQR && !i.isProcessing).length;
   int get selectedCount => _items.where((i) => i.isSelected).length;
 
   List<ScannedItem> get filteredItems {
@@ -155,9 +154,6 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
       case FilterMode.regularQrOnly:
         list = _items.where((i) => i.hasQR && !i.isQRIS).toList();
-        break;
-      case FilterMode.noQrOnly:
-        list = _items.where((i) => !i.hasQR && !i.isProcessing).toList();
         break;
       case FilterMode.all:
         list = List.from(_items);
@@ -545,7 +541,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// Helper pemindaian satu gambar & penyimpanan permanen jika terdeteksi QR/QRIS
-  Future<ScannedItem> _processScanTarget({
+  /// Memindai satu file. Mengembalikan `null` bila foto tidak berisi QR/QRIS,
+  /// sehingga daftar hanya berisi QR yang relevan (foto biasa tidak disimpan).
+  Future<ScannedItem?> _processScanTarget({
     required File file,
     required String originalName,
     required String? assetId,
@@ -573,25 +571,9 @@ class _HomeScreenState extends State<HomeScreen> {
         errorMessage: result.errorMessage,
         isSelected: result.isSelected,
       );
-    } else {
-      return ScannedItem(
-        id: result.id,
-        file: file,
-        fileName: originalName,
-        originalFileName: originalName,
-        assetId: assetId,
-        fileSize: fileSize,
-        addedAt: result.addedAt,
-        isProcessing: false,
-        hasQR: false,
-        isQRIS: false,
-        rawContent: result.rawContent,
-        qrType: result.qrType,
-        qrisDetails: null,
-        errorMessage: result.errorMessage,
-        isSelected: result.isSelected,
-      );
     }
+
+    return null;
   }
 
   /// Pemrosesan concurrent streaming untuk entitas galeri (3 concurrent workers)
@@ -635,7 +617,7 @@ class _HomeScreenState extends State<HomeScreen> {
               fileSize: fileSize,
             );
 
-            _items.insert(0, item);
+            if (item != null) _items.insert(0, item);
           }
         } catch (e) {
           AppLog.d('Error scanning entity ${entity.id}: $e');
@@ -746,7 +728,7 @@ class _HomeScreenState extends State<HomeScreen> {
             fileSize: fileSize,
           );
 
-          _items.insert(0, item);
+          if (item != null) _items.insert(0, item);
         } catch (e) {
           AppLog.d('Error scanning file ${file.path}: $e');
         }
@@ -1007,25 +989,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                if (_items.isNotEmpty) ...[
-                  OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.of(ctx).pop();
-                      _clearAll();
-                    },
-                    icon: Icon(Icons.delete_sweep_outlined, color: AppTheme.inkColor(isDark), size: 18),
-                    label: Text(
-                      'Bersihkan Semua Daftar Foto',
-                      style: TextStyle(color: AppTheme.inkColor(isDark), fontWeight: FontWeight.w600),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: AppTheme.borderColor(isDark)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                ],
                 OutlinedButton.icon(
                   onPressed: () async {
                     final navigator = Navigator.of(context);
@@ -1505,139 +1468,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _clearAll() async {
-    if (_items.isEmpty) return;
-
-    final confirmed = await _showConfirmDeleteModal(
-      items: _items,
-      title: 'Bersihkan Semua Riwayat?',
-      subtitle: 'Semua (${_items.length}) foto QR/QRIS akan dibersihkan dari riwayat dan galeri.',
-    );
-    if (!confirmed) return;
-
-    final isPro = await MonetizationService.isProUser();
-    final itemCount = _items.length;
-
-    if (!isPro) {
-      final currentQuota = await QuotaService.getRemainingQuota();
-      if (currentQuota < itemCount) {
-        if (!mounted) return;
-        await QuotaService.showQuotaExhaustedDialog(
-          context,
-          needed: itemCount,
-          current: currentQuota,
-        );
-        setState(() {});
-        return;
-      }
-
-      if (itemCount > 3) {
-        if (!mounted) return;
-        final allowed = await MonetizationService.showMassDeleteDialog(
-          context,
-          itemCount: itemCount,
-        );
-        if (!allowed) return;
-      } else if (itemCount <= 3) {
-        if (!mounted) return;
-        await MonetizationService.showInterstitialAd(context);
-      }
-    }
-
-    // Potong kuota di server SEBELUM foto dihapus (server-authoritative).
-    String? quotaRef;
-    var quotaConsumed = 0;
-    if (!isPro) {
-      quotaRef = 'del_${DateTime.now().microsecondsSinceEpoch}';
-      quotaConsumed = itemCount;
-      final quotaOk = await QuotaService.consumeQuota(quotaConsumed, refId: quotaRef);
-      if (!quotaOk) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(QuotaService.lastError ?? 'Kuota tidak cukup.'),
-            backgroundColor: AppTheme.dangerRed,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        return;
-      }
-    }
-
-    final systemAssetIds = _items
-        .map((i) => i.assetId)
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toList();
-
-    List<String> successfullyDeletedAssetIds = [];
-    if (systemAssetIds.isNotEmpty) {
-      try {
-        successfullyDeletedAssetIds = await PhotoManager.editor.deleteWithIds(systemAssetIds);
-      } catch (e) {
-        AppLog.d('Error deleting from system gallery: $e');
-      }
-    }
-
-    if (systemAssetIds.isNotEmpty && successfullyDeletedAssetIds.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Penghapusan dibatalkan (izin sistem tidak diberikan).'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-      // Penghapusan tidak terjadi → kembalikan kuota yang sudah terpotong.
-      if (quotaRef != null && quotaConsumed > 0) {
-        await QuotaService.refundQuota(quotaRef, quotaConsumed);
-      }
-      return;
-    }
-
-    final deletedAssetSet = successfullyDeletedAssetIds.toSet();
-    final itemsToRemove = _items.where((item) {
-      if (item.assetId != null && item.assetId!.isNotEmpty) {
-        return deletedAssetSet.contains(item.assetId);
-      }
-      return true;
-    }).toList();
-
-    for (var item in itemsToRemove) {
-      try {
-        if (item.file.existsSync()) {
-          item.file.deleteSync();
-        }
-      } catch (e) {
-        AppLog.d('Error deleting file: $e');
-      }
-    }
-
-    if (mounted) {
-      final remaining = await QuotaService.getRemainingQuota();
-      setState(() {
-        final removeIds = itemsToRemove.map((i) => i.id).toSet();
-        _items.removeWhere((i) => removeIds.contains(i.id));
-      });
-      await _saveItemsToStorage();
-      // Gating interstitial AdMob: hanya dihitung dari aksi hapus yang berhasil.
-      AdService.noteUserAction();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isPro
-                ? '✅ ${itemsToRemove.length} foto berhasil dibersihkan!'
-                : '✅ ${itemsToRemove.length} foto dibersihkan! (Sisa kuota: $remaining)',
-          ),
-          backgroundColor: AppTheme.qrisGreenDark,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1798,30 +1628,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: StatsCard(
-                      title: 'Bukan QR',
-                      count: noQrCount,
-                      icon: Icons.hide_image_outlined,
-                      color: AppTheme.nonQrGrey,
-                      isSelected: _filterMode == FilterMode.noQrOnly,
-                      onTap: () {
-                        setState(() {
-                          if (_filterMode == FilterMode.noQrOnly) {
-                            _filterMode = FilterMode.all;
-                            _selectedAcquirerFilter = 'ALL';
-                          } else {
-                            _filterMode = FilterMode.noQrOnly;
-                            _selectedAcquirerFilter = 'ALL';
-                            for (var i in _items) {
-                              i.isSelected = false;
-                            }
-                          }
-                        });
-                      },
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -1949,7 +1755,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
 
             // Filter Penyelenggara (Acquirer) Chips Bar
-            if (acquirerCounts.isNotEmpty && _filterMode != FilterMode.noQrOnly)
+            if (acquirerCounts.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Column(
@@ -2175,7 +1981,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             return ScannedItemCard(
                               key: ValueKey(item.id),
                               item: item,
-                              showSelection: _filterMode != FilterMode.noQrOnly,
+                              showSelection: true,
                               onFavoriteTap: () => _toggleFavorite(item),
                               onSelectChanged: (val) {
                                 setState(() {
