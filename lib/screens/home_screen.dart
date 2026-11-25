@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,11 +12,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/scanned_item.dart';
 import '../services/ad_service.dart';
 import '../services/auth_service.dart';
+import '../services/duplicate_service.dart';
 import '../services/image_scanner_service.dart';
 import '../services/image_storage_service.dart';
 import '../services/monetization_service.dart';
 import '../services/notification_service.dart';
 import '../services/quota_service.dart';
+import '../services/share_intent_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ad_banner.dart';
 import '../widgets/app_logo.dart';
@@ -22,6 +26,7 @@ import '../widgets/scanned_item_card.dart';
 import '../widgets/stats_card.dart';
 import 'favorites_screen.dart';
 import 'login_screen.dart';
+import 'onboarding_screen.dart';
 import 'report_screen.dart';
 import '../utils/app_log.dart';
 
@@ -48,6 +53,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<ScannedItem> _items = [];
   bool _isBatchProcessing = false;
+  StreamSubscription<List<File>>? _shareSub;
   bool _isCancelRequested = false;
   int _processedCount = 0;
   int _totalToProcess = 0;
@@ -70,6 +76,60 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadItemsFromStorage();
     _syncUserToCloudOnStartup();
+    _initShareIntent();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) OnboardingScreen.showIfNeeded(context);
+    });
+  }
+
+  /// Terima gambar dari share sheet (WhatsApp, Telegram, Galeri, Files).
+  void _initShareIntent() {
+    if (!ShareIntentService.isSupported) return;
+    ShareIntentService.init();
+    _shareSub = ShareIntentService.stream.listen(_handleSharedImages);
+    // Cold start: aplikasi dibuka langsung dari share sheet.
+    ShareIntentService.drainPending().then((files) {
+      if (files.isNotEmpty) _handleSharedImages(files);
+    });
+  }
+
+  /// Pindai gambar yang dibagikan dari aplikasi lain.
+  Future<void> _handleSharedImages(List<File> files) async {
+    if (files.isEmpty || _isBatchProcessing || !mounted) return;
+
+    setState(() => _isBatchProcessing = true);
+    var added = 0;
+    for (final file in files) {
+      try {
+        final item = await _processScanTarget(
+          file: file,
+          originalName: file.uri.pathSegments.last,
+          assetId: null,
+          fileSize: await file.length(),
+          photoDate: await file.lastModified(),
+        );
+        if (item != null) {
+          _items.insert(0, item);
+          added++;
+        }
+      } catch (e) {
+        AppLog.d('⚠️ Gagal memproses gambar share: $e');
+      }
+    }
+
+    if (added > 0) await _saveItemsToStorage();
+    if (!mounted) return;
+    setState(() => _isBatchProcessing = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          added > 0
+              ? '📥 $added gambar dari aplikasi lain ditambahkan'
+              : 'Tidak ada QR ditemukan pada gambar yang dibagikan.',
+        ),
+      ),
+    );
   }
 
   Future<void> _syncUserToCloudOnStartup() async {
@@ -87,6 +147,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _shareSub?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -411,6 +472,58 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       AppLog.d('⚠️ Retensi penyimpanan gagal: $e');
     }
+  }
+
+  // --------------------------------------------------------------- Duplikat
+
+  /// Jumlah foto yang berlebih karena QRIS difoto lebih dari sekali.
+  int get _duplicateExtraCount =>
+      DuplicateService.totalExtras(DuplicateService.groups(_items));
+
+  /// Tawarkan pembersihan foto duplikat (simpan yang terbaru).
+  Future<void> _openDuplicateCleaner() async {
+    final groups = DuplicateService.groups(_items);
+    if (groups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Tidak ada foto duplikat — semua QRIS unik.'),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _DuplicateCleanerSheet(groups: groups),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final extras = DuplicateService.extraPhotos(groups);
+    var removed = 0;
+    for (final item in extras) {
+      try {
+        if (await item.file.exists()) await item.file.delete();
+      } catch (e) {
+        AppLog.d('⚠️ Gagal hapus file duplikat: $e');
+      }
+      _items.removeWhere((e) => e.id == item.id);
+      removed++;
+    }
+
+    await _saveItemsToStorage();
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          '🧹 $removed foto duplikat dihapus · ${groups.length} QRIS dipertahankan.',
+        ),
+      ),
+    );
   }
 
   // ------------------------------------------------------------------ Favorit
@@ -2373,6 +2486,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     _pickImagesFromGallery();
                   } else if (value == 'camera') {
                     _takePhotoWithCamera();
+                  } else if (value == 'duplicates') {
+                    _openDuplicateCleaner();
                   }
                 },
                 itemBuilder: (context) => [
@@ -2393,6 +2508,37 @@ class _HomeScreenState extends State<HomeScreen> {
                         Icon(Icons.camera_alt_outlined, size: 18),
                         SizedBox(width: 10),
                         Text('Ambil Foto Kamera'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'duplicates',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.filter_none_rounded, size: 18),
+                        const SizedBox(width: 10),
+                        const Text('Bersihkan Duplikat'),
+                        if (_duplicateExtraCount > 0) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppTheme.qrAmber.withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '$_duplicateExtraCount',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: isDark
+                                    ? const Color(0xFFFBBF24)
+                                    : const Color(0xFF8A5A00),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2506,6 +2652,187 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Lembar konfirmasi pembersihan foto duplikat.
+class _DuplicateCleanerSheet extends StatelessWidget {
+  const _DuplicateCleanerSheet({required this.groups});
+
+  final List<DuplicateGroup> groups;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final money = NumberFormat('#,##0', 'id_ID');
+    final extras = DuplicateService.totalExtras(groups);
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.82,
+      ),
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor(isDark),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: AppTheme.borderColor(isDark))),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(top: 12, bottom: 14),
+            decoration: BoxDecoration(
+              color: AppTheme.borderColor(isDark),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: AppTheme.qrAmber.withOpacity(0.16),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.filter_none_rounded,
+                      size: 20, color: AppTheme.qrAmber),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Bersihkan Duplikat',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.3,
+                          color: AppTheme.inkColor(isDark),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${groups.length} QRIS difoto lebih dari sekali · '
+                        '$extras foto berlebih',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: AppTheme.mutedColor(isDark),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              itemCount: groups.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, i) {
+                final g = groups[i];
+                return Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.subtleBg(isDark),
+                    borderRadius: BorderRadius.circular(11),
+                    border: Border.all(color: AppTheme.borderColor(isDark)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              g.merchantName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.inkColor(isDark),
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${g.count} foto · simpan yang terbaru · ${g.acquirer}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: AppTheme.mutedColor(isDark),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        g.amount > 0 ? 'Rp ${money.format(g.amount)}' : '-',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: isDark
+                              ? const Color(0xFF34D399)
+                              : AppTheme.qrisGreenDark,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                20, 14, 20, 18 + MediaQuery.of(context).viewPadding.bottom),
+            child: Column(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    icon: const Icon(Icons.cleaning_services_rounded, size: 18),
+                    label: Text(
+                      'Hapus $extras foto duplikat',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 14),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.qrisGreenDark,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 50),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(13)),
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: Text(
+                    'Batal',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.mutedColor(isDark),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
