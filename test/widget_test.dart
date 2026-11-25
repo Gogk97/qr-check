@@ -31,17 +31,27 @@ void main() {
     expect(find.text('Kirim Konfirmasi Pembayaran'), findsOneWidget);
   });
 
-  test('QuotaService menolak pemotongan kuota tanpa server (anti-bypass offline)', () async {
+  test('QuotaService memakai jatah offline terbatas, bukan bypass bebas', () async {
     // 1. Kuota awal Google = 10 (cache lokal untuk tampilan)
     final googleQuota = await QuotaService.initQuotaForLogin(isGoogle: true, userId: 'test_google_1');
     expect(googleQuota, equals(10));
     expect(await QuotaService.getRemainingQuota(), equals(10));
 
-    // 2. Tanpa sesi Supabase, pemotongan kuota HARUS ditolak.
-    final consumed = await QuotaService.consumeQuota(3);
-    expect(consumed, isFalse);
-    expect(QuotaService.lastError, isNotNull);
-    expect(await QuotaService.getRemainingQuota(), equals(10));
+    // 2. Tanpa sesi Supabase: operasi tetap diizinkan, TETAPI dicatat sebagai
+    //    antrean yang harus disinkronkan ke server saat online.
+    final consumed = await QuotaService.consumeQuota(3, refId: 'test-offline-1');
+    expect(consumed, isTrue, reason: 'sinyal buruk tidak boleh memblokir hapus');
+    expect(QuotaService.usedOffline, isTrue);
+    expect(await QuotaService.pendingOfflineItems(), equals(3),
+        reason: 'potongan tetap ditagihkan ke server nanti');
+
+    // 3. Jatah offline per hari dibatasi, jadi tidak bisa dipakai gratis terus.
+    final overLimit = await QuotaService.consumeQuota(
+      QuotaService.offlineDailyAllowance,
+      refId: 'test-offline-over',
+    );
+    expect(overLimit, isFalse);
+    expect(QuotaService.lastError, contains('Kuota offline habis'));
 
     // 3. Reward iklan juga tidak boleh menambah kuota secara lokal.
     final added = await QuotaService.addQuota(1);

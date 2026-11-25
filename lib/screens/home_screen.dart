@@ -20,6 +20,7 @@ import '../services/notification_service.dart';
 import '../services/qris_audit_service.dart';
 import '../services/quota_service.dart';
 import '../services/share_intent_service.dart';
+import '../services/trash_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ad_banner.dart';
 import '../widgets/app_logo.dart';
@@ -31,6 +32,7 @@ import 'favorites_screen.dart';
 import 'login_screen.dart';
 import 'onboarding_screen.dart';
 import 'report_screen.dart';
+import 'trash_screen.dart';
 import '../utils/app_log.dart';
 
 enum FilterMode {
@@ -65,7 +67,8 @@ class _HomeScreenState extends State<HomeScreen> {
   double _scanSpeed = 0.0;
   final Stopwatch _scanStopwatch = Stopwatch();
 
-  FilterMode _filterMode = FilterMode.qrisOnly; // Default: Hanya QRIS sesuai permintaan user
+  FilterMode _filterMode =
+      FilterMode.qrisOnly; // Default: Hanya QRIS sesuai permintaan user
   SortMode _sortMode = SortMode.newest;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
@@ -80,6 +83,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadItemsFromStorage();
     _syncUserToCloudOnStartup();
     _initShareIntent();
+    // Bersihkan tempat sampah kedaluwarsa & sinkronkan kuota offline.
+    TrashService.purgeExpired();
+    QuotaService.syncPending();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) OnboardingScreen.showIfNeeded(context);
     });
@@ -239,7 +245,9 @@ class _HomeScreenState extends State<HomeScreen> {
         list = list.where((i) => i.hasQR && !i.isQRIS).toList();
       } else {
         list = list
-            .where((i) => i.isQRIS && i.qrisDetails?.displayAcquirer == _selectedAcquirerFilter)
+            .where((i) =>
+                i.isQRIS &&
+                i.qrisDetails?.displayAcquirer == _selectedAcquirerFilter)
             .toList();
       }
     }
@@ -268,17 +276,18 @@ class _HomeScreenState extends State<HomeScreen> {
         list.sort((a, b) => a.addedAt.compareTo(b.addedAt));
         break;
       case SortMode.amountHigh:
-        list.sort((a, b) => (b.qrisDetails?.amount ?? 0)
-            .compareTo(a.qrisDetails?.amount ?? 0));
+        list.sort((a, b) =>
+            (b.qrisDetails?.amount ?? 0).compareTo(a.qrisDetails?.amount ?? 0));
         break;
       case SortMode.amountLow:
-        list.sort((a, b) => (a.qrisDetails?.amount ?? 0)
-            .compareTo(b.qrisDetails?.amount ?? 0));
+        list.sort((a, b) =>
+            (a.qrisDetails?.amount ?? 0).compareTo(b.qrisDetails?.amount ?? 0));
         break;
       case SortMode.nameAz:
         list.sort((a, b) => (a.qrisDetails?.merchantName ?? a.fileName)
             .toLowerCase()
-            .compareTo((b.qrisDetails?.merchantName ?? b.fileName).toLowerCase()));
+            .compareTo(
+                (b.qrisDetails?.merchantName ?? b.fileName).toLowerCase()));
         break;
     }
 
@@ -300,7 +309,8 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Izin galeri diperlukan untuk membaca dan memindai foto QR/QRIS.'),
+              content: Text(
+                  'Izin galeri diperlukan untuk membaca dan memindai foto QR/QRIS.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -325,7 +335,9 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) {
           setState(() => _isBatchProcessing = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Tidak ada album foto yang ditemukan di galeri HP Anda.')),
+            const SnackBar(
+                content: Text(
+                    'Tidak ada album foto yang ditemukan di galeri HP Anda.')),
           );
         }
         return;
@@ -338,7 +350,8 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) {
           setState(() => _isBatchProcessing = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Galeri HP Anda belum memiliki foto.')),
+            const SnackBar(
+                content: Text('Galeri HP Anda belum memiliki foto.')),
           );
         }
         return;
@@ -366,7 +379,8 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() => _isBatchProcessing = false);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Semua foto di galeri HP Anda sudah selesai dipindai! Tidak ada foto baru.'),
+              content: Text(
+                  'Semua foto di galeri HP Anda sudah selesai dipindai! Tidak ada foto baru.'),
               backgroundColor: AppTheme.qrisGreenDark,
               behavior: SnackBarBehavior.floating,
             ),
@@ -487,6 +501,13 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _openTrash() async {
+    final restored = await TrashScreen.open(context);
+    if (restored.isEmpty || !mounted) return;
+    setState(() => _items.insertAll(0, restored));
+    await _saveItemsToStorage();
+  }
+
   // --------------------------------------------------------- Backup & pulih
 
   Future<void> _openBackup() async {
@@ -529,13 +550,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirmed != true || !mounted) return;
 
     final extras = DuplicateService.extraPhotos(groups);
+    final trashed = await TrashService.moveAll(extras);
     var removed = 0;
     for (final item in extras) {
-      try {
-        if (await item.file.exists()) await item.file.delete();
-      } catch (e) {
-        AppLog.d('⚠️ Gagal hapus file duplikat: $e');
-      }
       _items.removeWhere((e) => e.id == item.id);
       removed++;
     }
@@ -545,10 +562,17 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        duration: const Duration(seconds: 6),
         behavior: SnackBarBehavior.floating,
         content: Text(
           '🧹 $removed foto duplikat dihapus · ${groups.length} QRIS dipertahankan.',
         ),
+        action: trashed.isEmpty
+            ? null
+            : SnackBarAction(
+                label: 'Urungkan',
+                onPressed: () => _undoTrash(trashed),
+              ),
       ),
     );
   }
@@ -624,7 +648,10 @@ class _HomeScreenState extends State<HomeScreen> {
         subtitle: 'Simpan QRIS & QR penting dalam satu halaman',
         features: const [
           (Icons.star_rounded, 'Tandai QRIS & QR favorit'),
-          (Icons.folder_special_rounded, 'Halaman Favorit terpisah + pencarian'),
+          (
+            Icons.folder_special_rounded,
+            'Halaman Favorit terpisah + pencarian'
+          ),
           (Icons.bolt_rounded, 'Hapus massal tanpa batas & bebas iklan'),
         ],
       );
@@ -645,7 +672,8 @@ class _HomeScreenState extends State<HomeScreen> {
           decoration: BoxDecoration(
             color: AppTheme.cardColor(isDark),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(top: BorderSide(color: AppTheme.borderColor(isDark))),
+            border:
+                Border(top: BorderSide(color: AppTheme.borderColor(isDark))),
           ),
           padding: EdgeInsets.only(
             left: 22,
@@ -712,7 +740,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 16),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: AppTheme.subtleBg(isDark),
                   borderRadius: BorderRadius.circular(12),
@@ -720,8 +749,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 child: Column(
                   children: [
-                    for (final f in features)
-                      _buildProFeatureRow(f.$1, f.$2),
+                    for (final f in features) _buildProFeatureRow(f.$1, f.$2),
                   ],
                 ),
               ),
@@ -730,8 +758,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.qrisGreenDark,
                   minimumSize: const Size(double.infinity, 50),
-                  shape:
-                      RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
                 ),
                 onPressed: () => Navigator.of(ctx).pop(true),
                 child: const Text(
@@ -791,8 +819,10 @@ class _HomeScreenState extends State<HomeScreen> {
           title: 'Rapikan nama file (PRO)',
           subtitle: 'Ubah nama file menjadi mudah dicari',
           features: const [
-            (Icons.drive_file_rename_outline_rounded,
-                'Nama dari merchant + nominal + tanggal'),
+            (
+              Icons.drive_file_rename_outline_rounded,
+              'Nama dari merchant + nominal + tanggal'
+            ),
             (Icons.search_rounded, 'Mudah ditemukan di galeri & file manager'),
             (Icons.bolt_rounded, 'Sekali tekan untuk semua QRIS'),
           ],
@@ -854,7 +884,8 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+              style:
+                  const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -872,7 +903,8 @@ class _HomeScreenState extends State<HomeScreen> {
     required int fileSize,
     DateTime? photoDate,
   }) async {
-    final id = 'scan_${DateTime.now().microsecondsSinceEpoch}_${file.path.hashCode}';
+    final id =
+        'scan_${DateTime.now().microsecondsSinceEpoch}_${file.path.hashCode}';
     var result = await _scannerService.scanImage(file, id: id);
 
     if (result.hasQR || result.isQRIS) {
@@ -957,22 +989,26 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         final now = DateTime.now();
-        if (now.difference(lastUiUpdateTime).inMilliseconds >= 150 || _processedCount >= entities.length) {
+        if (now.difference(lastUiUpdateTime).inMilliseconds >= 150 ||
+            _processedCount >= entities.length) {
           lastUiUpdateTime = now;
           if (mounted) setState(() {});
         }
 
-        if (itemsSinceLastSave >= 12 || now.difference(lastSaveTime).inMilliseconds >= 2500) {
+        if (itemsSinceLastSave >= 12 ||
+            now.difference(lastSaveTime).inMilliseconds >= 2500) {
           lastSaveTime = now;
           itemsSinceLastSave = 0;
           await _saveItemsToStorage();
         }
 
-        if (now.difference(lastNotificationTime).inMilliseconds >= 600 || _processedCount >= entities.length) {
+        if (now.difference(lastNotificationTime).inMilliseconds >= 600 ||
+            _processedCount >= entities.length) {
           lastNotificationTime = now;
           notificationService.showScanProgress(
             processedCount: _alreadyScannedCount + _processedCount,
-            totalToProcess: _totalGalleryCount > 0 ? _totalGalleryCount : _totalToProcess,
+            totalToProcess:
+                _totalGalleryCount > 0 ? _totalGalleryCount : _totalToProcess,
             qrisFoundCount: qrisCount,
           );
         }
@@ -1000,7 +1036,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: wasCancelled ? Colors.orange.shade800 : (qrisCount > 0 ? AppTheme.qrisGreenDark : null),
+          backgroundColor: wasCancelled
+              ? Colors.orange.shade800
+              : (qrisCount > 0 ? AppTheme.qrisGreenDark : null),
           content: Text(
             wasCancelled
                 ? 'Pemindaian dihentikan ($_processedCount/$_totalToProcess foto selesai). Data yang selesai tetap tersimpan!'
@@ -1014,7 +1052,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// Pemrosesan concurrent untuk list file (kamera & picker manual)
-  Future<void> _processFiles(List<File> files, {Map<File, String>? fileAssetMap}) async {
+  Future<void> _processFiles(List<File> files,
+      {Map<File, String>? fileAssetMap}) async {
     setState(() {
       _isBatchProcessing = true;
       _isCancelRequested = false;
@@ -1068,18 +1107,21 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         final now = DateTime.now();
-        if (now.difference(lastUiUpdateTime).inMilliseconds >= 150 || _processedCount >= files.length) {
+        if (now.difference(lastUiUpdateTime).inMilliseconds >= 150 ||
+            _processedCount >= files.length) {
           lastUiUpdateTime = now;
           if (mounted) setState(() {});
         }
 
-        if (itemsSinceLastSave >= 10 || now.difference(lastSaveTime).inMilliseconds >= 2500) {
+        if (itemsSinceLastSave >= 10 ||
+            now.difference(lastSaveTime).inMilliseconds >= 2500) {
           lastSaveTime = now;
           itemsSinceLastSave = 0;
           await _saveItemsToStorage();
         }
 
-        if (now.difference(lastNotificationTime).inMilliseconds >= 600 || _processedCount >= files.length) {
+        if (now.difference(lastNotificationTime).inMilliseconds >= 600 ||
+            _processedCount >= files.length) {
           lastNotificationTime = now;
           notificationService.showScanProgress(
             processedCount: _processedCount,
@@ -1111,7 +1153,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: wasCancelled ? Colors.orange.shade800 : (qrisCount > 0 ? AppTheme.qrisGreenDark : null),
+          backgroundColor: wasCancelled
+              ? Colors.orange.shade800
+              : (qrisCount > 0 ? AppTheme.qrisGreenDark : null),
           content: Text(
             wasCancelled
                 ? 'Pemindaian dihentikan ($_processedCount/$_totalToProcess foto selesai). Data yang selesai tetap tersimpan!'
@@ -1135,251 +1179,311 @@ class _HomeScreenState extends State<HomeScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      // Lima tombol aksi: layar kecil bisa overflow, jadi dibuat scrollable.
+      isScrollControlled: true,
       builder: (ctx) {
         return Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(ctx).size.height * 0.88,
+          ),
           decoration: BoxDecoration(
             color: AppTheme.cardColor(isDark),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-            border: Border(top: BorderSide(color: AppTheme.borderColor(isDark), width: 1)),
+            border: Border(
+                top: BorderSide(color: AppTheme.borderColor(isDark), width: 1)),
           ),
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           child: SafeArea(
             top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppTheme.borderColor(isDark),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
                       decoration: BoxDecoration(
-                        color: AppTheme.subtleBg(isDark),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppTheme.borderColor(isDark)),
+                        color: AppTheme.borderColor(isDark),
+                        borderRadius: BorderRadius.circular(2),
                       ),
-                      child: Icon(
-                        user?.isGuest == false ? Icons.verified_user_outlined : Icons.person_outline_rounded,
-                        color: user?.isGuest == false ? AppTheme.primary : AppTheme.mutedColor(isDark),
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  user?.name ?? 'Pengguna',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: -0.3,
-                                    color: AppTheme.inkColor(isDark),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                                decoration: BoxDecoration(
-                                  color: user?.isGuest == false
-                                      ? AppTheme.primary.withOpacity(0.12)
-                                      : AppTheme.subtleBg(isDark),
-                                  borderRadius: BorderRadius.circular(5),
-                                  border: Border.all(
-                                    color: user?.isGuest == false
-                                        ? AppTheme.primary.withOpacity(0.35)
-                                        : AppTheme.borderColor(isDark),
-                                  ),
-                                ),
-                                child: Text(
-                                  user?.isGuest == false ? 'Google' : 'Tamu',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                    color: user?.isGuest == false ? AppTheme.primary : AppTheme.mutedColor(isDark),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            user?.email ?? '',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppTheme.mutedColor(isDark),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                // Quota Card in Profile
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppTheme.subtleBg(isDark),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: isPro ? AppTheme.qrAmber.withOpacity(0.45) : AppTheme.borderColor(isDark),
                     ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  const SizedBox(height: 18),
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Icon(
-                            isPro ? Icons.star_rounded : Icons.confirmation_number_outlined,
-                            color: isPro ? AppTheme.qrAmber : AppTheme.primary,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Sisa Kuota Hapus',
-                                style: TextStyle(fontSize: 11, color: AppTheme.mutedColor(isDark)),
-                              ),
-                              const SizedBox(height: 1),
-                              Text(
-                                isPro ? 'UNLIMITED (PRO)' : '$remainingQuota Foto',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w800,
-                                  color: isPro ? AppTheme.qrAmber : AppTheme.inkColor(isDark),
-                                  fontFeatures: const [FontFeature.tabularFigures()],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      if (!isPro)
-                        TextButton.icon(
-                          onPressed: () async {
-                            Navigator.of(ctx).pop();
-                            await QuotaService.watchRewardedAdForQuota(context);
-                            setState(() {});
-                          },
-                          icon: const Icon(Icons.ondemand_video_rounded, size: 15, color: AppTheme.primary),
-                          label: const Text(
-                            '+1 Kuota',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 12,
-                              color: AppTheme.primary,
-                            ),
-                          ),
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: AppTheme.subtleBg(isDark),
+                          borderRadius: BorderRadius.circular(10),
+                          border:
+                              Border.all(color: AppTheme.borderColor(isDark)),
                         ),
+                        child: Icon(
+                          user?.isGuest == false
+                              ? Icons.verified_user_outlined
+                              : Icons.person_outline_rounded,
+                          color: user?.isGuest == false
+                              ? AppTheme.primary
+                              : AppTheme.mutedColor(isDark),
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    user?.name ?? 'Pengguna',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: -0.3,
+                                      color: AppTheme.inkColor(isDark),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 7, vertical: 2.5),
+                                  decoration: BoxDecoration(
+                                    color: user?.isGuest == false
+                                        ? AppTheme.primary.withOpacity(0.12)
+                                        : AppTheme.subtleBg(isDark),
+                                    borderRadius: BorderRadius.circular(5),
+                                    border: Border.all(
+                                      color: user?.isGuest == false
+                                          ? AppTheme.primary.withOpacity(0.35)
+                                          : AppTheme.borderColor(isDark),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    user?.isGuest == false ? 'Google' : 'Tamu',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: user?.isGuest == false
+                                          ? AppTheme.primary
+                                          : AppTheme.mutedColor(isDark),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              user?.email ?? '',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.mutedColor(isDark),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 14),
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    Navigator.of(ctx).pop();
-                    await MonetizationService.openProPurchase(context);
-                  },
-                  icon: const Icon(Icons.workspace_premium_rounded, color: Colors.white, size: 19),
-                  label: const Text(
-                    'Beli PRO (Sekali Bayar)',
-                    style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+                  const SizedBox(height: 18),
+                  // Quota Card in Profile
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppTheme.subtleBg(isDark),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isPro
+                            ? AppTheme.qrAmber.withOpacity(0.45)
+                            : AppTheme.borderColor(isDark),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              isPro
+                                  ? Icons.star_rounded
+                                  : Icons.confirmation_number_outlined,
+                              color:
+                                  isPro ? AppTheme.qrAmber : AppTheme.primary,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Sisa Kuota Hapus',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: AppTheme.mutedColor(isDark)),
+                                ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  isPro
+                                      ? 'UNLIMITED (PRO)'
+                                      : '$remainingQuota Foto',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                    color: isPro
+                                        ? AppTheme.qrAmber
+                                        : AppTheme.inkColor(isDark),
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures()
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        if (!isPro)
+                          TextButton.icon(
+                            onPressed: () async {
+                              Navigator.of(ctx).pop();
+                              await QuotaService.watchRewardedAdForQuota(
+                                  context);
+                              setState(() {});
+                            },
+                            icon: const Icon(Icons.ondemand_video_rounded,
+                                size: 15, color: AppTheme.primary),
+                            label: const Text(
+                              '+1 Kuota',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12,
+                                color: AppTheme.primary,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.qrAmber,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  const SizedBox(height: 14),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      Navigator.of(ctx).pop();
+                      await MonetizationService.openProPurchase(context);
+                    },
+                    icon: const Icon(Icons.workspace_premium_rounded,
+                        color: Colors.white, size: 19),
+                    label: const Text(
+                      'Beli PRO (Sekali Bayar)',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700, color: Colors.white),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.qrAmber,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    Navigator.of(ctx).pop();
-                    await _openBackup();
-                  },
-                  icon: Icon(Icons.cloud_sync_outlined,
-                      color: AppTheme.inkColor(isDark), size: 18),
-                  label: Text(
-                    'Backup & Pulihkan',
-                    style: TextStyle(
-                        color: AppTheme.inkColor(isDark),
-                        fontWeight: FontWeight.w600),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.of(ctx).pop();
+                      await _openTrash();
+                    },
+                    icon: Icon(Icons.delete_outline_rounded,
+                        color: AppTheme.inkColor(isDark), size: 18),
+                    label: Text(
+                      'Tempat Sampah',
+                      style: TextStyle(
+                          color: AppTheme.inkColor(isDark),
+                          fontWeight: FontWeight.w600),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.borderColor(isDark)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: AppTheme.borderColor(isDark)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.of(ctx).pop();
+                      await _openBackup();
+                    },
+                    icon: Icon(Icons.cloud_sync_outlined,
+                        color: AppTheme.inkColor(isDark), size: 18),
+                    label: Text(
+                      'Backup & Pulihkan',
+                      style: TextStyle(
+                          color: AppTheme.inkColor(isDark),
+                          fontWeight: FontWeight.w600),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.borderColor(isDark)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    Navigator.of(ctx).pop();
-                    await _autoRenameAll();
-                  },
-                  icon: Icon(Icons.drive_file_rename_outline_rounded,
-                      color: AppTheme.inkColor(isDark), size: 18),
-                  label: Text(
-                    'Rapikan Nama File (PRO)',
-                    style: TextStyle(
-                        color: AppTheme.inkColor(isDark),
-                        fontWeight: FontWeight.w600),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.of(ctx).pop();
+                      await _autoRenameAll();
+                    },
+                    icon: Icon(Icons.drive_file_rename_outline_rounded,
+                        color: AppTheme.inkColor(isDark), size: 18),
+                    label: Text(
+                      'Rapikan Nama File (PRO)',
+                      style: TextStyle(
+                          color: AppTheme.inkColor(isDark),
+                          fontWeight: FontWeight.w600),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.borderColor(isDark)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: AppTheme.borderColor(isDark)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final navigator = Navigator.of(context);
+                      Navigator.of(ctx).pop();
+                      await AuthService.logout();
+                      if (!mounted) return;
+                      navigator.pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const LoginScreen()),
+                        (route) => false,
+                      );
+                    },
+                    icon: const Icon(Icons.logout_rounded,
+                        color: AppTheme.dangerRed, size: 17),
+                    label: const Text(
+                      'Ganti Akun / Keluar',
+                      style: TextStyle(
+                          color: AppTheme.dangerRed,
+                          fontWeight: FontWeight.w700),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(
+                          color: AppTheme.dangerRed.withOpacity(0.35)),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final navigator = Navigator.of(context);
-                    Navigator.of(ctx).pop();
-                    await AuthService.logout();
-                    if (!mounted) return;
-                    navigator.pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (_) => const LoginScreen()),
-                      (route) => false,
-                    );
-                  },
-                  icon: const Icon(Icons.logout_rounded, color: AppTheme.dangerRed, size: 17),
-                  label: const Text(
-                    'Ganti Akun / Keluar',
-                    style: TextStyle(color: AppTheme.dangerRed, fontWeight: FontWeight.w700),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: AppTheme.dangerRed.withOpacity(0.35)),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -1389,7 +1493,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _toggleSelectAll() {
     final currentFiltered = filteredItems;
-    final allSelected = currentFiltered.isNotEmpty && currentFiltered.every((i) => i.isSelected);
+    final allSelected = currentFiltered.isNotEmpty &&
+        currentFiltered.every((i) => i.isSelected);
     setState(() {
       for (var item in currentFiltered) {
         item.isSelected = !allSelected;
@@ -1466,9 +1571,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       decoration: BoxDecoration(
                         color: AppTheme.dangerRed.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppTheme.dangerRed.withOpacity(0.3)),
+                        border: Border.all(
+                            color: AppTheme.dangerRed.withOpacity(0.3)),
                       ),
-                      child: const Icon(Icons.delete_sweep_rounded, color: AppTheme.dangerRed, size: 24),
+                      child: const Icon(Icons.delete_sweep_rounded,
+                          color: AppTheme.dangerRed, size: 24),
                     ),
                     const SizedBox(width: 14),
                     Expanded(
@@ -1486,7 +1593,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            subtitle ?? 'File akan dihapus secara permanen dari galeri ponsel.',
+                            subtitle ??
+                                'File akan dihapus secara permanen dari galeri ponsel.',
                             style: TextStyle(
                               fontSize: 12,
                               color: AppTheme.mutedColor(isDark),
@@ -1502,16 +1610,19 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 9),
                         decoration: BoxDecoration(
                           color: AppTheme.subtleBg(isDark),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppTheme.borderColor(isDark)),
+                          border:
+                              Border.all(color: AppTheme.borderColor(isDark)),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.storage_rounded, size: 14, color: AppTheme.primary),
+                            const Icon(Icons.storage_rounded,
+                                size: 14, color: AppTheme.primary),
                             const SizedBox(width: 6),
                             Flexible(
                               child: Text(
@@ -1531,20 +1642,25 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 9),
                         decoration: BoxDecoration(
                           color: AppTheme.subtleBg(isDark),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppTheme.borderColor(isDark)),
+                          border:
+                              Border.all(color: AppTheme.borderColor(isDark)),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.qr_code_2_rounded, size: 14, color: AppTheme.qrisGreen),
+                            const Icon(Icons.qr_code_2_rounded,
+                                size: 14, color: AppTheme.qrisGreen),
                             const SizedBox(width: 6),
                             Flexible(
                               child: Text(
-                                qrisCount > 0 ? '$qrisCount QRIS' : '$regQrCount QR',
+                                qrisCount > 0
+                                    ? '$qrisCount QRIS'
+                                    : '$regQrCount QR',
                                 style: const TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w700,
@@ -1573,7 +1689,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           decoration: BoxDecoration(
                             color: AppTheme.subtleBg(isDark),
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: AppTheme.borderColor(isDark)),
+                            border:
+                                Border.all(color: AppTheme.borderColor(isDark)),
                           ),
                           child: Center(
                             child: Text(
@@ -1602,7 +1719,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                 width: 64,
                                 height: 64,
                                 color: AppTheme.subtleBg(isDark),
-                                child: Icon(Icons.broken_image_outlined, size: 18, color: AppTheme.mutedColor(isDark)),
+                                child: Icon(Icons.broken_image_outlined,
+                                    size: 18,
+                                    color: AppTheme.mutedColor(isDark)),
                               ),
                             ),
                             if (it.isQRIS)
@@ -1610,12 +1729,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                 bottom: 2,
                                 right: 2,
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 4, vertical: 1),
                                   decoration: BoxDecoration(
                                     color: AppTheme.qrisGreenDark,
                                     borderRadius: BorderRadius.circular(4),
                                   ),
-                                  child: const Text('QRIS', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w700)),
+                                  child: const Text('QRIS',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 8,
+                                          fontWeight: FontWeight.w700)),
                                 ),
                               ),
                           ],
@@ -1626,15 +1750,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 14),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: AppTheme.qrAmber.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppTheme.qrAmber.withOpacity(0.3)),
+                    border:
+                        Border.all(color: AppTheme.qrAmber.withOpacity(0.3)),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.shield_outlined, size: 15, color: AppTheme.qrAmber),
+                      const Icon(Icons.shield_outlined,
+                          size: 15, color: AppTheme.qrAmber),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -1657,12 +1784,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         onPressed: () => Navigator.of(ctx).pop(false),
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
                           side: BorderSide(color: AppTheme.borderColor(isDark)),
                         ),
                         child: Text(
                           'Batal',
-                          style: TextStyle(fontWeight: FontWeight.w600, color: AppTheme.inkColor(isDark)),
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.inkColor(isDark)),
                         ),
                       ),
                     ),
@@ -1671,7 +1801,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       flex: 6,
                       child: ElevatedButton.icon(
                         onPressed: () => Navigator.of(ctx).pop(true),
-                        icon: const Icon(Icons.delete_rounded, size: 17, color: Colors.white),
+                        icon: const Icon(Icons.delete_rounded,
+                            size: 17, color: Colors.white),
                         label: Text(
                           'Hapus $count Foto',
                           style: const TextStyle(
@@ -1684,7 +1815,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           backgroundColor: AppTheme.dangerRed,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
                         ),
                       ),
                     ),
@@ -1746,7 +1878,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!isPro) {
       quotaRef = 'del_${DateTime.now().microsecondsSinceEpoch}';
       quotaConsumed = selected.length;
-      final quotaOk = await QuotaService.consumeQuota(quotaConsumed, refId: quotaRef);
+      final quotaOk =
+          await QuotaService.consumeQuota(quotaConsumed, refId: quotaRef);
       if (!quotaOk) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1770,7 +1903,8 @@ class _HomeScreenState extends State<HomeScreen> {
     List<String> successfullyDeletedAssetIds = [];
     if (systemAssetIds.isNotEmpty) {
       try {
-        successfullyDeletedAssetIds = await PhotoManager.editor.deleteWithIds(systemAssetIds);
+        successfullyDeletedAssetIds =
+            await PhotoManager.editor.deleteWithIds(systemAssetIds);
       } catch (e) {
         AppLog.d('Error deleting from system gallery: $e');
       }
@@ -1781,7 +1915,8 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Penghapusan dibatalkan (izin sistem tidak diberikan).'),
+            content:
+                Text('Penghapusan dibatalkan (izin sistem tidak diberikan).'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -1801,14 +1936,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return true;
     }).toList();
 
-    for (var item in itemsToRemove) {
-      try {
-        if (item.file.existsSync()) {
-          item.file.deleteSync();
-        }
-      } catch (e) {
-        AppLog.d('Error deleting file: $e');
-      }
+    // Salinan lokal dipindah ke tempat sampah (bisa dipulihkan 24 jam).
+    final trashed = <TrashEntry>[];
+    for (final item in itemsToRemove) {
+      final entry = await TrashService.move(
+        item,
+        galleryDeleted: (item.assetId ?? '').isNotEmpty,
+      );
+      if (entry != null) trashed.add(entry);
     }
 
     if (mounted) {
@@ -1822,18 +1957,56 @@ class _HomeScreenState extends State<HomeScreen> {
       AdService.noteUserAction();
 
       if (!mounted) return;
+      final offlineNote = QuotaService.usedOffline
+          ? ' · kuota tersinkron otomatis saat online'
+          : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          duration: const Duration(seconds: 6),
           content: Text(
             isPro
-                ? '✅ ${itemsToRemove.length} foto berhasil dibersihkan dari galeri!'
-                : '✅ ${itemsToRemove.length} foto dibersihkan! (Sisa kuota: $remaining)',
+                ? '✅ ${itemsToRemove.length} foto dibersihkan!'
+                : '✅ ${itemsToRemove.length} foto dibersihkan! '
+                    '(Sisa kuota: $remaining)$offlineNote',
           ),
           backgroundColor: AppTheme.qrisGreenDark,
           behavior: SnackBarBehavior.floating,
+          action: trashed.isEmpty
+              ? null
+              : SnackBarAction(
+                  label: 'Urungkan',
+                  textColor: Colors.white,
+                  onPressed: () => _undoTrash(trashed),
+                ),
         ),
       );
     }
+  }
+
+  /// Batalkan penghapusan terakhir dengan memulihkan dari tempat sampah.
+  Future<void> _undoTrash(List<TrashEntry> entries) async {
+    final restored = await TrashService.restore(entries);
+    if (restored.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Item sudah tidak bisa dipulihkan.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _items.insertAll(0, restored));
+    await _saveItemsToStorage();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('↩️ ${restored.length} item dipulihkan ke daftar.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
@@ -1917,7 +2090,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       right: -4,
                       top: -4,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
                         constraints: const BoxConstraints(minWidth: 17),
                         decoration: BoxDecoration(
                           color: AppTheme.qrAmber,
@@ -2026,7 +2200,8 @@ class _HomeScreenState extends State<HomeScreen> {
             if (_isBatchProcessing)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: AppTheme.cardColor(isDark),
                   borderRadius: BorderRadius.circular(10),
@@ -2039,7 +2214,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(
                           width: 14,
                           height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppTheme.primary),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -2069,8 +2245,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                     style: TextStyle(
                                       fontSize: 10.5,
                                       fontWeight: FontWeight.w600,
-                                      color: isDark ? const Color(0xFF34D399) : AppTheme.qrisGreenDark,
-                                      fontFeatures: const [FontFeature.tabularFigures()],
+                                      color: isDark
+                                          ? const Color(0xFF34D399)
+                                          : AppTheme.qrisGreenDark,
+                                      fontFeatures: const [
+                                        FontFeature.tabularFigures()
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -2101,24 +2281,33 @@ class _HomeScreenState extends State<HomeScreen> {
                                 },
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
                               color: AppTheme.dangerRed.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: AppTheme.dangerRed.withOpacity(0.3)),
+                              border: Border.all(
+                                  color: AppTheme.dangerRed.withOpacity(0.3)),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(
-                                  _isCancelRequested ? Icons.hourglass_top : Icons.pause_circle_filled,
+                                  _isCancelRequested
+                                      ? Icons.hourglass_top
+                                      : Icons.pause_circle_filled,
                                   size: 14,
                                   color: AppTheme.dangerRed,
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
-                                  _isCancelRequested ? 'Menghentikan...' : 'Jeda',
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.dangerRed),
+                                  _isCancelRequested
+                                      ? 'Menghentikan...'
+                                      : 'Jeda',
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.dangerRed),
                                 ),
                               ],
                             ),
@@ -2131,12 +2320,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       borderRadius: BorderRadius.circular(3),
                       child: LinearProgressIndicator(
                         value: _totalGalleryCount > 0
-                            ? (_alreadyScannedCount + _processedCount) / _totalGalleryCount
-                            : (_totalToProcess > 0 ? _processedCount / _totalToProcess : null),
+                            ? (_alreadyScannedCount + _processedCount) /
+                                _totalGalleryCount
+                            : (_totalToProcess > 0
+                                ? _processedCount / _totalToProcess
+                                : null),
                         minHeight: 5,
                         backgroundColor: AppTheme.subtleBg(isDark),
                         valueColor: AlwaysStoppedAnimation<Color>(
-                          _isCancelRequested ? AppTheme.qrAmber : AppTheme.primary,
+                          _isCancelRequested
+                              ? AppTheme.qrAmber
+                              : AppTheme.primary,
                         ),
                       ),
                     ),
@@ -2147,13 +2341,15 @@ class _HomeScreenState extends State<HomeScreen> {
             // Filter Penyelenggara (Acquirer) Chips Bar
             if (acquirerCounts.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.account_balance_wallet_outlined, size: 13, color: AppTheme.qrisGreen),
+                        const Icon(Icons.account_balance_wallet_outlined,
+                            size: 13, color: AppTheme.qrisGreen),
                         const SizedBox(width: 5),
                         Text(
                           _filterMode == FilterMode.allQr
@@ -2168,10 +2364,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         if (_selectedAcquirerFilter != 'ALL') ...[
                           const Spacer(),
                           GestureDetector(
-                            onTap: () => setState(() => _selectedAcquirerFilter = 'ALL'),
+                            onTap: () =>
+                                setState(() => _selectedAcquirerFilter = 'ALL'),
                             child: const Text(
                               'Reset Filter',
-                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.dangerRed),
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.dangerRed),
                             ),
                           ),
                         ],
@@ -2190,7 +2390,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             selected: _selectedAcquirerFilter == 'ALL',
                             onSelected: (selected) {
-                              if (selected) setState(() => _selectedAcquirerFilter = 'ALL');
+                              if (selected) {
+                                setState(
+                                    () => _selectedAcquirerFilter = 'ALL');
+                              }
                             },
                             backgroundColor: AppTheme.cardColor(isDark),
                             selectedColor: AppTheme.primary.withOpacity(0.15),
@@ -2198,19 +2401,26 @@ class _HomeScreenState extends State<HomeScreen> {
                               color: _selectedAcquirerFilter == 'ALL'
                                   ? AppTheme.primary
                                   : AppTheme.borderColor(isDark),
-                              width: _selectedAcquirerFilter == 'ALL' ? 1.4 : 1.0,
+                              width:
+                                  _selectedAcquirerFilter == 'ALL' ? 1.4 : 1.0,
                             ),
                             labelStyle: TextStyle(
                               fontSize: 11,
-                              fontWeight: _selectedAcquirerFilter == 'ALL' ? FontWeight.w700 : FontWeight.w500,
+                              fontWeight: _selectedAcquirerFilter == 'ALL'
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
                               color: _selectedAcquirerFilter == 'ALL'
-                                  ? (isDark ? const Color(0xFF34D399) : AppTheme.qrisGreenDark)
+                                  ? (isDark
+                                      ? const Color(0xFF34D399)
+                                      : AppTheme.qrisGreenDark)
                                   : AppTheme.inkColor(isDark),
                             ),
                             showCheckmark: false,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
                           ),
-                          if (_filterMode == FilterMode.allQr && regularQrCount > 0)
+                          if (_filterMode == FilterMode.allQr &&
+                              regularQrCount > 0)
                             Padding(
                               padding: const EdgeInsets.only(left: 6),
                               child: ChoiceChip(
@@ -2218,14 +2428,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                 selected: _selectedAcquirerFilter == 'NON_QRIS',
                                 onSelected: (selected) {
                                   setState(() {
-                                    _selectedAcquirerFilter = selected ? 'NON_QRIS' : 'ALL';
+                                    _selectedAcquirerFilter =
+                                        selected ? 'NON_QRIS' : 'ALL';
                                   });
                                 },
                                 backgroundColor: AppTheme.cardColor(isDark),
-                                selectedColor: AppTheme.qrAmber.withOpacity(0.18),
+                                selectedColor:
+                                    AppTheme.qrAmber.withOpacity(0.18),
                                 labelStyle: TextStyle(
                                   fontSize: 11,
-                                  fontWeight: _selectedAcquirerFilter == 'NON_QRIS' ? FontWeight.w700 : FontWeight.w500,
+                                  fontWeight:
+                                      _selectedAcquirerFilter == 'NON_QRIS'
+                                          ? FontWeight.w700
+                                          : FontWeight.w500,
                                   color: _selectedAcquirerFilter == 'NON_QRIS'
                                       ? AppTheme.qrAmber
                                       : AppTheme.inkColor(isDark),
@@ -2234,10 +2449,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                   color: _selectedAcquirerFilter == 'NON_QRIS'
                                       ? AppTheme.qrAmber
                                       : AppTheme.borderColor(isDark),
-                                  width: _selectedAcquirerFilter == 'NON_QRIS' ? 1.4 : 1.0,
+                                  width: _selectedAcquirerFilter == 'NON_QRIS'
+                                      ? 1.4
+                                      : 1.0,
                                 ),
                                 showCheckmark: false,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8)),
                               ),
                             ),
                           ...acquirerCounts.entries.map((entry) {
@@ -2251,27 +2469,36 @@ class _HomeScreenState extends State<HomeScreen> {
                                 selected: isSel,
                                 onSelected: (selected) {
                                   setState(() {
-                                    _selectedAcquirerFilter = selected ? acqName : 'ALL';
-                                    if (selected && _filterMode != FilterMode.qrisOnly) {
+                                    _selectedAcquirerFilter =
+                                        selected ? acqName : 'ALL';
+                                    if (selected &&
+                                        _filterMode != FilterMode.qrisOnly) {
                                       _filterMode = FilterMode.qrisOnly;
                                     }
                                   });
                                 },
                                 backgroundColor: AppTheme.cardColor(isDark),
-                                selectedColor: AppTheme.qrisGreen.withOpacity(0.15),
+                                selectedColor:
+                                    AppTheme.qrisGreen.withOpacity(0.15),
                                 labelStyle: TextStyle(
                                   fontSize: 11,
-                                  fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
+                                  fontWeight:
+                                      isSel ? FontWeight.w700 : FontWeight.w500,
                                   color: isSel
-                                      ? (isDark ? const Color(0xFF34D399) : AppTheme.qrisGreenDark)
+                                      ? (isDark
+                                          ? const Color(0xFF34D399)
+                                          : AppTheme.qrisGreenDark)
                                       : AppTheme.inkColor(isDark),
                                 ),
                                 side: BorderSide(
-                                  color: isSel ? AppTheme.qrisGreen : AppTheme.borderColor(isDark),
+                                  color: isSel
+                                      ? AppTheme.qrisGreen
+                                      : AppTheme.borderColor(isDark),
                                   width: isSel ? 1.4 : 1.0,
                                 ),
                                 showCheckmark: false,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8)),
                               ),
                             );
                           }),
@@ -2381,7 +2608,8 @@ class _HomeScreenState extends State<HomeScreen> {
             if (shouldShowDeleteToolbar)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: AppTheme.cardColor(isDark),
                   borderRadius: BorderRadius.circular(10),
@@ -2393,11 +2621,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       onTap: _toggleSelectAll,
                       borderRadius: BorderRadius.circular(6),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 2, horizontal: 2),
                         child: Row(
                           children: [
                             Icon(
-                              filteredItems.isNotEmpty && filteredItems.every((i) => i.isSelected)
+                              filteredItems.isNotEmpty &&
+                                      filteredItems.every((i) => i.isSelected)
                                   ? Icons.check_box_rounded
                                   : Icons.check_box_outline_blank_rounded,
                               size: 18,
@@ -2405,7 +2635,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              selectedCount > 0 ? '$selectedCount dipilih' : 'Pilih Semua',
+                              selectedCount > 0
+                                  ? '$selectedCount dipilih'
+                                  : 'Pilih Semua',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                                 fontSize: 12,
@@ -2421,14 +2653,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       TextButton.icon(
                         onPressed: _shareSelected,
                         icon: const Icon(Icons.share_outlined, size: 15),
-                        label: const Text('Bagikan', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        label: const Text('Bagikan',
+                            style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
                       TextButton.icon(
                         onPressed: _deleteSelected,
-                        icon: const Icon(Icons.delete_outline_rounded, size: 15, color: AppTheme.dangerRed),
+                        icon: const Icon(Icons.delete_outline_rounded,
+                            size: 15, color: AppTheme.dangerRed),
                         label: const Text(
                           'Hapus',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.dangerRed),
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.dangerRed),
                         ),
                       ),
                     ],
@@ -2454,7 +2692,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
                         return GridView.builder(
                           padding: const EdgeInsets.all(16),
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: crossAxisCount,
                             childAspectRatio: 0.78,
                             crossAxisSpacing: 12,
@@ -2488,157 +2727,161 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           const AdBanner(),
           Container(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        decoration: BoxDecoration(
-          color: AppTheme.cardColor(isDark),
-          border: Border(
-            top: BorderSide(color: AppTheme.borderColor(isDark), width: 1),
-          ),
-        ),
-        child: SafeArea(
-          top: false,
-          child: Row(
-            children: [
-              // Gallery Scanner Action Button
-              Expanded(
-                flex: 4,
-                child: ElevatedButton.icon(
-                  onPressed: _isBatchProcessing ? null : _scanAllGalleryPhotos,
-                  icon: const Icon(Icons.qr_code_scanner_rounded, size: 19),
-                  label: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      _items.isNotEmpty ? 'Pindai / Lanjutkan Galeri (AI)' : 'Pindai Semua Galeri (AI)',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13.5,
-                        letterSpacing: -0.2,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            decoration: BoxDecoration(
+              color: AppTheme.cardColor(isDark),
+              border: Border(
+                top: BorderSide(color: AppTheme.borderColor(isDark), width: 1),
+              ),
+            ),
+            child: SafeArea(
+              top: false,
+              child: Row(
+                children: [
+                  // Gallery Scanner Action Button
+                  Expanded(
+                    flex: 4,
+                    child: ElevatedButton.icon(
+                      onPressed:
+                          _isBatchProcessing ? null : _scanAllGalleryPhotos,
+                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 19),
+                      label: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          _items.isNotEmpty
+                              ? 'Pindai / Lanjutkan Galeri (AI)'
+                              : 'Pindai Semua Galeri (AI)',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13.5,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.qrisGreenDark,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
                     ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.qrisGreenDark,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Popup Option: Manual Multi-select Picker or Camera
-              PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'picker') {
-                    _pickImagesFromGallery();
-                  } else if (value == 'camera') {
-                    _takePhotoWithCamera();
-                  } else if (value == 'duplicates') {
-                    _openDuplicateCleaner();
-                  } else if (value == 'audit') {
-                    _openAudit();
-                  }
-                },
-                itemBuilder: (context) => [
-                  const PopupMenuItem(
-                    value: 'picker',
-                    child: Row(
-                      children: [
-                        Icon(Icons.photo_library_outlined, size: 18),
-                        SizedBox(width: 10),
-                        Text('Pilih Beberapa Foto Manual'),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'camera',
-                    child: Row(
-                      children: [
-                        Icon(Icons.camera_alt_outlined, size: 18),
-                        SizedBox(width: 10),
-                        Text('Ambil Foto Kamera'),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'audit',
-                    child: Row(
-                      children: [
-                        const Icon(Icons.verified_user_outlined, size: 18),
-                        const SizedBox(width: 10),
-                        const Text('Audit Semua QRIS'),
-                        if (_needsReviewCount > 0) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: AppTheme.qrAmber.withOpacity(0.18),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              '$_needsReviewCount',
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w800,
-                                color: isDark
-                                    ? const Color(0xFFFBBF24)
-                                    : const Color(0xFF8A5A00),
+                  const SizedBox(width: 10),
+                  // Popup Option: Manual Multi-select Picker or Camera
+                  PopupMenuButton<String>(
+                    onSelected: (value) {
+                      if (value == 'picker') {
+                        _pickImagesFromGallery();
+                      } else if (value == 'camera') {
+                        _takePhotoWithCamera();
+                      } else if (value == 'duplicates') {
+                        _openDuplicateCleaner();
+                      } else if (value == 'audit') {
+                        _openAudit();
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'picker',
+                        child: Row(
+                          children: [
+                            Icon(Icons.photo_library_outlined, size: 18),
+                            SizedBox(width: 10),
+                            Text('Pilih Beberapa Foto Manual'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'camera',
+                        child: Row(
+                          children: [
+                            Icon(Icons.camera_alt_outlined, size: 18),
+                            SizedBox(width: 10),
+                            Text('Ambil Foto Kamera'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'audit',
+                        child: Row(
+                          children: [
+                            const Icon(Icons.verified_user_outlined, size: 18),
+                            const SizedBox(width: 10),
+                            const Text('Audit Semua QRIS'),
+                            if (_needsReviewCount > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.qrAmber.withOpacity(0.18),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  '$_needsReviewCount',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: isDark
+                                        ? const Color(0xFFFBBF24)
+                                        : const Color(0xFF8A5A00),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'duplicates',
-                    child: Row(
-                      children: [
-                        const Icon(Icons.filter_none_rounded, size: 18),
-                        const SizedBox(width: 10),
-                        const Text('Bersihkan Duplikat'),
-                        if (_duplicateExtraCount > 0) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: AppTheme.qrAmber.withOpacity(0.18),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              '$_duplicateExtraCount',
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w800,
-                                color: isDark
-                                    ? const Color(0xFFFBBF24)
-                                    : const Color(0xFF8A5A00),
+                            ],
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'duplicates',
+                        child: Row(
+                          children: [
+                            const Icon(Icons.filter_none_rounded, size: 18),
+                            const SizedBox(width: 10),
+                            const Text('Bersihkan Duplikat'),
+                            if (_duplicateExtraCount > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.qrAmber.withOpacity(0.18),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  '$_duplicateExtraCount',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: isDark
+                                        ? const Color(0xFFFBBF24)
+                                        : const Color(0xFF8A5A00),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
-                      ],
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppTheme.subtleBg(isDark),
+                        border: Border.all(
+                          color: AppTheme.borderColor(isDark),
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.more_horiz_rounded,
+                          size: 20, color: AppTheme.inkColor(isDark)),
                     ),
                   ),
                 ],
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppTheme.subtleBg(isDark),
-                    border: Border.all(
-                      color: AppTheme.borderColor(isDark),
-                    ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(Icons.more_horiz_rounded, size: 20, color: AppTheme.inkColor(isDark)),
-                ),
               ),
-            ],
-          ),
-        ),
+            ),
           ),
         ],
       ),
@@ -2646,13 +2889,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildEmptyState(bool isDark) {
-    String message = 'Belum ada foto yang dipindai.\nTekan tombol di bawah untuk memindai dan memverifikasi kode QRIS di galeri perangkat Anda.';
+    String message =
+        'Belum ada foto yang dipindai.\nTekan tombol di bawah untuk memindai dan memverifikasi kode QRIS di galeri perangkat Anda.';
     IconData icon = Icons.qr_code_scanner_rounded;
     Color iconColor = AppTheme.qrisGreen;
 
     if (_items.isNotEmpty) {
       if (_filterMode == FilterMode.qrisOnly) {
-        message = 'Tidak ada foto QRIS yang ditemukan dari ${_items.length} foto yang dipindai.\nCoba picu pemindaian ulang galeri.';
+        message =
+            'Tidak ada foto QRIS yang ditemukan dari ${_items.length} foto yang dipindai.\nCoba picu pemindaian ulang galeri.';
         icon = Icons.verified_outlined;
         iconColor = AppTheme.qrisGreen;
       } else if (_filterMode == FilterMode.allQr) {
@@ -2692,7 +2937,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               const SizedBox(height: 18),
               Text(
-                _items.isEmpty ? 'Pindai Galeri Perangkat' : 'Tidak Ada Hasil Filter',
+                _items.isEmpty
+                    ? 'Pindai Galeri Perangkat'
+                    : 'Tidak Ada Hasil Filter',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 17,
@@ -2722,7 +2969,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.qrisGreenDark,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 13),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),

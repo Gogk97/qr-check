@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
@@ -15,6 +17,20 @@ import '../utils/app_log.dart';
 class QuotaService {
   static const String _quotaKey = 'user_delete_quota_v1';
   static const String _initializedUsersKey = 'initialized_quota_users_v1';
+
+  // --- Kuota offline (antrean sinkronisasi) ---
+  static const String _pendingKey = 'quota_pending_ops_v1';
+  static const String _offlineAllowanceKey = 'quota_offline_allowance_v1';
+  static const String _offlineDateKey = 'quota_offline_date_v1';
+
+  /// Batas pemakaian tanpa jaringan per hari. Mencegah bypass dengan
+  /// mematikan internet, tetapi tetap memberi jalan saat sinyal buruk.
+  static const int offlineDailyAllowance = 20;
+
+  static bool _usedOffline = false;
+
+  /// True bila operasi terakhir memakai kuota offline (belum tersinkron).
+  static bool get usedOffline => _usedOffline;
 
   /// Inisialisasi kuota saat login akun (sinkronisasi dari server Supabase dengan perlindungan anti-exploit)
   static Future<int> initQuotaForLogin({
@@ -147,8 +163,7 @@ class QuotaService {
     _lastQuotaError = null;
 
     if (!SupabaseService.isAuthenticated) {
-      _lastQuotaError = 'Butuh koneksi internet untuk memotong kuota.';
-      return false;
+      return _consumeOffline(count, refId ?? 'del_${DateTime.now().microsecondsSinceEpoch}');
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -180,15 +195,148 @@ class QuotaService {
       };
       return false;
     } catch (e) {
-      AppLog.d('⚠️ consume_quota gagal: $e');
-      _lastQuotaError = 'Tidak dapat menghubungi server. Coba lagi saat online.';
+      // Jaringan bermasalah → pakai jatah offline, sinkronkan nanti.
+      AppLog.d('⚠️ consume_quota gagal (${e.runtimeType}), mencoba jalur offline');
+      return _consumeOffline(count, ref);
+    }
+  }
+
+  /// Potong kuota secara lokal saat offline, lalu antre untuk disinkronkan.
+  ///
+  /// Dibatasi [offlineDailyAllowance] item per hari supaya tidak bisa dipakai
+  /// sebagai celah gratis tanpa batas.
+  static Future<bool> _consumeOffline(int count, String refId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    final today = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+
+    if (prefs.getString(_offlineDateKey) != today) {
+      await prefs.setString(_offlineDateKey, today);
+      await prefs.setInt(_offlineAllowanceKey, offlineDailyAllowance);
+    }
+
+    final allowance = prefs.getInt(_offlineAllowanceKey) ?? offlineDailyAllowance;
+    if (allowance < count) {
+      _lastQuotaError =
+          'Kuota offline habis ($allowance tersisa hari ini). Sambungkan '
+          'internet untuk melanjutkan.';
       return false;
     }
+
+    await prefs.setInt(_offlineAllowanceKey, allowance - count);
+
+    final pending = prefs.getStringList(_pendingKey) ?? <String>[];
+    pending.add(jsonEncode({
+      'count': count,
+      'refId': refId,
+      'at': now.toIso8601String(),
+    }));
+    await prefs.setStringList(_pendingKey, pending);
+
+    _usedOffline = true;
+    _lastQuotaError = null;
+    AppLog.d('📴 Kuota offline dipakai: $count '
+        '(sisa jatah hari ini ${allowance - count})');
+    return true;
+  }
+
+  /// Jumlah item yang menunggu sinkronisasi kuota.
+  static Future<int> pendingOfflineItems() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_pendingKey) ?? const [];
+    var total = 0;
+    for (final entry in raw) {
+      try {
+        final op = jsonDecode(entry);
+        if (op is Map) total += (op['count'] as num?)?.toInt() ?? 0;
+      } catch (_) {}
+    }
+    return total;
+  }
+
+  /// Kirim ulang pemotongan kuota yang terjadi saat offline.
+  /// Dipanggil saat aplikasi dibuka dan setelah operasi online berhasil.
+  static Future<int> syncPending() async {
+    if (!SupabaseService.isAuthenticated) return 0;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_pendingKey) ?? <String>[];
+    if (raw.isEmpty) return 0;
+
+    final keep = <String>[];
+    var synced = 0;
+
+    for (final entry in raw) {
+      Map<String, dynamic> op;
+      try {
+        final decoded = jsonDecode(entry);
+        if (decoded is! Map) continue;
+        op = Map<String, dynamic>.from(decoded);
+      } catch (_) {
+        continue;
+      }
+
+      final count = (op['count'] as num?)?.toInt() ?? 0;
+      final refId = '${op['refId'] ?? ''}';
+      if (count <= 0 || refId.isEmpty) continue;
+
+      var retry = false;
+      try {
+        final res = await SupabaseService.client.rpc('consume_quota', params: {
+          'p_amount': count,
+          'p_ref_id': refId,
+        });
+        if (res is Map && res['success'] == true) {
+          synced += count;
+          final remaining = (res['remaining_quota'] as num?)?.toInt();
+          if (remaining != null) {
+            await prefs.setInt(_quotaKey, remaining);
+            final uid = prefs.getString('last_active_user_id_v1');
+            if (uid != null) await prefs.setInt('user_quota_v1_$uid', remaining);
+          }
+        } else {
+          retry = true; // kuota habis / rate limit → coba lagi nanti
+        }
+      } catch (_) {
+        retry = true; // masih offline
+      }
+      if (retry) keep.add(entry);
+    }
+
+    await prefs.setStringList(_pendingKey, keep);
+    if (synced > 0) {
+      AppLog.d('☁️ Sinkron kuota offline: $synced item, '
+          '${keep.length} operasi tersisa');
+    }
+    return synced;
   }
 
   /// Kembalikan kuota yang sudah terpotong bila penghapusan dibatalkan.
   /// Idempoten di server: satu [refId] hanya bisa di-refund sekali.
   static Future<void> refundQuota(String refId, int amount) async {
+    // Bila potongan masih di antrean offline, cukup buang dari antrean.
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_pendingKey) ?? <String>[];
+    if (raw.isNotEmpty) {
+      final kept = <String>[];
+      var removed = false;
+      for (final entry in raw) {
+        try {
+          final op = jsonDecode(entry);
+          if (op is Map && '${op['refId']}' == refId) {
+            removed = true;
+            continue;
+          }
+        } catch (_) {}
+        kept.add(entry);
+      }
+      if (removed) {
+        await prefs.setStringList(_pendingKey, kept);
+        AppLog.d('↩️ Potongan kuota offline dibatalkan ($refId)');
+        return;
+      }
+    }
+
     if (amount <= 0 || !SupabaseService.isAuthenticated) return;
     try {
       await SupabaseService.client.rpc('refund_quota', params: {
