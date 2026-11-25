@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
@@ -19,6 +20,7 @@ import '../widgets/ad_banner.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/scanned_item_card.dart';
 import '../widgets/stats_card.dart';
+import 'favorites_screen.dart';
 import 'login_screen.dart';
 import '../utils/app_log.dart';
 
@@ -365,6 +367,181 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       AppLog.d('⚠️ Retensi penyimpanan gagal: $e');
     }
+  }
+
+  // ------------------------------------------------------------------ Favorit
+
+  int get _favoriteCount => _items.where((e) => e.isFavorite).length;
+
+  /// Tandai / lepas favorit. Khusus PRO; pengguna gratis diarahkan ke upsell.
+  Future<void> _toggleFavorite(ScannedItem item) async {
+    final isPro = await MonetizationService.isProUser();
+    if (!isPro) {
+      if (mounted) await _showFavoritesProSheet();
+      return;
+    }
+
+    item.isFavorite = !item.isFavorite;
+    HapticFeedback.selectionClick();
+    if (mounted) setState(() {});
+    await _saveItemsToStorage();
+  }
+
+  Future<void> _openFavorites() async {
+    final isPro = await MonetizationService.isProUser();
+    if (!isPro) {
+      if (mounted) await _showFavoritesProSheet();
+      return;
+    }
+    if (!mounted) return;
+
+    await FavoritesScreen.open(
+      context,
+      items: _items,
+      onToggleFavorite: _toggleFavorite,
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// Upsell khusus fitur Favorit (dipakai saat pengguna gratis mengetuk bintang).
+  Future<void> _showFavoritesProSheet() async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bought = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          decoration: BoxDecoration(
+            color: AppTheme.cardColor(isDark),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border(top: BorderSide(color: AppTheme.borderColor(isDark))),
+          ),
+          padding: EdgeInsets.only(
+            left: 22,
+            right: 22,
+            top: 18,
+            bottom: 22 + MediaQuery.of(ctx).viewPadding.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 18),
+                  decoration: BoxDecoration(
+                    color: AppTheme.borderColor(isDark),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(11),
+                    decoration: BoxDecoration(
+                      color: AppTheme.qrAmber.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.star_rounded, color: AppTheme.qrAmber, size: 24),
+                  ),
+                  const SizedBox(width: 13),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Favorit khusus PRO',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.4,
+                            color: AppTheme.inkColor(isDark),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Simpan QRIS & QR penting dalam satu halaman',
+                          style: TextStyle(fontSize: 12, color: AppTheme.mutedColor(isDark)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    icon: Icon(Icons.close_rounded, size: 19, color: AppTheme.mutedColor(isDark)),
+                    tooltip: 'Tutup',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppTheme.subtleBg(isDark),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.borderColor(isDark)),
+                ),
+                child: Column(
+                  children: [
+                    _buildProFeatureRow(Icons.star_rounded, 'Tandai QRIS & QR favorit'),
+                    _buildProFeatureRow(Icons.folder_special_rounded, 'Halaman Favorit terpisah + pencarian'),
+                    _buildProFeatureRow(Icons.bolt_rounded, 'Hapus massal tanpa batas & bebas iklan'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.qrisGreenDark,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text(
+                  'Upgrade ke PRO',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                ),
+              ),
+              const SizedBox(height: 4),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: Text(
+                  'Nanti saja',
+                  style: TextStyle(color: AppTheme.mutedColor(isDark), fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (bought == true && mounted) {
+      final purchased = await MonetizationService.openProPurchase(context);
+      if (purchased && mounted) setState(() {});
+    }
+  }
+
+  Widget _buildProFeatureRow(IconData icon, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: [
+          Icon(icon, size: 17, color: AppTheme.qrisGreen),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Helper pemindaian satu gambar & penyimpanan permanen jika terdeteksi QR/QRIS
@@ -1488,6 +1665,65 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
+          // Favorit (fitur PRO)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _openFavorites,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppTheme.subtleBg(isDark),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppTheme.borderColor(isDark)),
+                    ),
+                    child: Icon(
+                      _favoriteCount > 0
+                          ? Icons.star_rounded
+                          : Icons.star_outline_rounded,
+                      size: 20,
+                      color: _favoriteCount > 0
+                          ? AppTheme.qrAmber
+                          : AppTheme.inkColor(isDark),
+                    ),
+                  ),
+                  if (_favoriteCount > 0)
+                    Positioned(
+                      right: -4,
+                      top: -4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        constraints: const BoxConstraints(minWidth: 17),
+                        decoration: BoxDecoration(
+                          color: AppTheme.qrAmber,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: AppTheme.cardColor(isDark),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Text(
+                          '$_favoriteCount',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 9.5,
+                            height: 1.3,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: InkWell(
@@ -1940,6 +2176,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               key: ValueKey(item.id),
                               item: item,
                               showSelection: _filterMode != FilterMode.noQrOnly,
+                              onFavoriteTap: () => _toggleFavorite(item),
                               onSelectChanged: (val) {
                                 setState(() {
                                   item.isSelected = val ?? false;

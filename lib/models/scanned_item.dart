@@ -106,6 +106,9 @@ class ScannedItem {
   String? errorMessage;
   bool isSelected;
 
+  /// Ditandai favorit oleh pengguna PRO. Disimpan lokal bersama item lain.
+  bool isFavorite;
+
   ScannedItem({
     required this.id,
     required this.file,
@@ -122,6 +125,7 @@ class ScannedItem {
     this.qrisDetails,
     this.errorMessage,
     this.isSelected = false,
+    this.isFavorite = false,
   }) : originalFileName = originalFileName ?? fileName;
 
   Map<String, dynamic> toJson() => {
@@ -139,6 +143,7 @@ class ScannedItem {
         'qrType': qrType,
         'qrisDetails': qrisDetails?.toJson(),
         'errorMessage': errorMessage,
+        'isFavorite': isFavorite,
       };
 
   factory ScannedItem.fromJson(Map<String, dynamic> json) => ScannedItem(
@@ -156,6 +161,7 @@ class ScannedItem {
         qrType: json['qrType'] ?? 'none',
         qrisDetails: json['qrisDetails'] != null ? QRISDetails.fromJson(json['qrisDetails']) : null,
         errorMessage: json['errorMessage'],
+        isFavorite: json['isFavorite'] ?? false,
       );
 
   ScanCategory get category {

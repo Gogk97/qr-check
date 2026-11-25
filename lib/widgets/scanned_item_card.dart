@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../models/scanned_item.dart';
 import '../theme/app_theme.dart';
+import 'favorite_star_button.dart';
 import 'qris_detail_bottom_sheet.dart';
 
 class ScannedItemCard extends StatelessWidget {
@@ -10,11 +11,15 @@ class ScannedItemCard extends StatelessWidget {
   final ValueChanged<bool?> onSelectChanged;
   final bool showSelection;
 
+  /// Aksi ketuk ikon bintang. Null = tombol favorit tidak ditampilkan.
+  final VoidCallback? onFavoriteTap;
+
   const ScannedItemCard({
     super.key,
     required this.item,
     required this.onSelectChanged,
     this.showSelection = true,
+    this.onFavoriteTap,
   });
 
   @override
@@ -242,6 +247,14 @@ class ScannedItemCard extends StatelessWidget {
                           fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
+                      if (onFavoriteTap != null) ...[
+                        const SizedBox(width: 4),
+                        FavoriteStarButton(
+                          active: item.isFavorite,
+                          onTap: onFavoriteTap!,
+                          size: 20,
+                        ),
+                      ],
                     ],
                   ),
                 ],
