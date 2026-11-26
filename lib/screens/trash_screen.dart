@@ -30,6 +30,10 @@ class _TrashScreenState extends State<TrashScreen> {
   Directory? _trashDir;
   bool _loading = true;
 
+  /// Item yang sudah dipulihkan selama halaman ini terbuka — dikirim balik
+  /// ke Beranda saat halaman ditutup.
+  final List<ScannedItem> _restoredItems = [];
+
   @override
   void initState() {
     super.initState();
@@ -52,18 +56,13 @@ class _TrashScreenState extends State<TrashScreen> {
     if (_entries.isEmpty) return;
     final restored = await TrashService.restore(_entries);
     if (!mounted) return;
+    _restoredItems.addAll(restored);
     setState(() {
       _entries = _entries
           .where((e) => !restored.any((i) => i.id == e.item.id))
           .toList();
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        content: Text('${restored.length} item dipulihkan ke daftar.'),
-      ),
-    );
-    if (restored.isNotEmpty) Navigator.of(context).pop(restored);
+    Navigator.of(context).pop(_restoredItems);
   }
 
   Future<void> _restoreOne(TrashEntry entry) async {
@@ -72,10 +71,14 @@ class _TrashScreenState extends State<TrashScreen> {
     setState(() => _entries =
         _entries.where((e) => e.id != entry.id).toList());
     if (restored.isNotEmpty) {
+      _restoredItems.addAll(restored);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
-          content: Text('${entry.merchantName} dipulihkan.'),
+          content: Text(
+            '${entry.merchantName} dipulihkan — kembali ke Beranda saat '
+            'halaman ini ditutup.',
+          ),
         ),
       );
     }
@@ -144,12 +147,20 @@ class _TrashScreenState extends State<TrashScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return PopScope(
-      canPop: true,
-      onPopInvokedWithResult: (_, __) {},
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        Navigator.of(context).pop(_restoredItems);
+      },
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
           titleSpacing: 8,
+          leading: IconButton(
+            tooltip: 'Kembali',
+            icon: const Icon(Icons.arrow_back_rounded),
+            onPressed: () => Navigator.of(context).pop(_restoredItems),
+          ),
           title: Row(
             children: [
               Container(

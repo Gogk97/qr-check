@@ -211,9 +211,15 @@ class ImageStorageService {
     try {
       final dir = await storageDir();
       var deleted = 0;
+      // Jangan sentuh file yang baru dibuat/dipulihkan: item hasil "Urungkan"
+      // atau restore tempat sampah bisa belum terdaftar saat pembersihan jalan.
+      final safeThreshold =
+          DateTime.now().subtract(const Duration(minutes: 10));
       await for (final entity in dir.list(followLinks: false)) {
         if (entity is File && !keepPaths.contains(entity.path)) {
           try {
+            final stat = await entity.stat();
+            if (stat.modified.isAfter(safeThreshold)) continue;
             await entity.delete();
             deleted++;
           } catch (_) {}
