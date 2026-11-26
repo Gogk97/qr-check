@@ -1,0 +1,62 @@
+Galeri penuh screenshot QRIS? Qristal memindai seluruh galeri Anda, menemukan semua foto QRIS dan QR code, lalu membantu Anda merapikannya dalam sekali sentuh.
+
+Semua pemindaian terjadi DI PERANGKAT Anda. Foto tidak pernah diunggah ke server mana pun. Privasi Anda utuh.
+
+■ APA YANG BISA DILAKUKAN QRISTAL
+
+• Pindai otomatis seluruh galeri
+Tidak perlu memilih satu per satu. Qristal menelusuri ribuan foto dan menandai mana yang berisi QRIS atau QR code.
+
+• Baca detail QRIS lengkap
+Nama merchant, kota, kode pos, kategori usaha (MCC), nominal, NMID, dan penyelenggara pembayaran (BCA, GoPay, OVO, DANA, ShopeePay, LinkAja, dan lainnya).
+
+• QRIS Safety Check
+Setiap QRIS diperiksa strukturnya: checksum CRC, kelengkapan tag, konflik NMID, dan mata uang. Anda langsung tahu mana kode yang aman, perlu dicek, atau mencurigakan — lengkap dengan skor 0-100.
+
+• Pencarian dan urutan
+Temukan QRIS tertentu dengan mencari nama merchant, kota, atau nama file. Urutkan berdasarkan terbaru, terlama, nominal terbesar, atau nama.
+
+• Hapus massal dengan aman
+Pilih puluhan foto sekaligus. Yang terhapus masuk Tempat Sampah selama 24 jam, dan Anda punya tombol Urungkan bila salah pilih.
+
+• Terima kiriman dari aplikasi lain
+Bagikan gambar dari WhatsApp, Telegram, atau Galeri langsung ke Qristal — otomatis dipindai tanpa perlu membuka aplikasi lebih dulu.
+
+■ KHUSUS PENGGUNA PRO (SEKALI BAYAR, TANPA LANGGANAN)
+
+• Laporan QRIS
+Grafik nominal per hari, filter rentang tanggal dan harga, total transaksi, rata-rata, dan daftar merchant. Satu QRIS yang difoto berkali-kali hanya dihitung sekali, dengan keterangan jumlah fotonya.
+
+• Ekspor CSV dan Excel
+Unduh laporan untuk pembukuan, arsip pajak, atau analisis di spreadsheet.
+
+• Favorit QRIS
+Simpan QRIS langganan di urutan teratas agar mudah ditemukan.
+
+• Rapikan nama file otomatis
+Nama file diubah otomatis mengikuti isi QRIS: tanggal, merchant, nominal, dan penyelenggara.
+
+• Backup dan pulihkan
+Amankan seluruh koleksi ke satu file .qristal, lalu pulihkan saat ganti ponsel.
+
+• Tanpa batas dan tanpa iklan
+Hapus sebanyak apa pun, tanpa gangguan iklan.
+
+■ COCOK UNTUK SIAPA
+
+• Pengguna QRIS harian yang menyimpan banyak screenshot bukti pembayaran
+• Pemilik usaha dan pedagang yang menerima QRIS
+• Siapa pun yang galerinya penuh screenshot QR dari grup chat dan media sosial
+
+■ PRIVASI TERJAGA
+
+• Pemindaian berjalan sepenuhnya di perangkat (on-device)
+• Foto tidak diunggah dan tidak disimpan di server
+• Sesi login tersimpan di penyimpanan aman Android (Keystore)
+• Tidak ada penjualan data pengguna
+
+■ RINGAN DAN CEPAT
+
+Dirancang untuk ponsel sehari-hari. Pemindaian berjalan bertahap sehingga aplikasi tetap responsif meski galeri berisi ribuan foto.
+
+Bersihkan galeri QRIS Anda sekarang. Sekali pindai, langsung rapi.
