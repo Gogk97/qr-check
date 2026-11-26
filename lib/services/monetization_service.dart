@@ -3,12 +3,16 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/qris_payment_screen.dart';
 import '../theme/app_theme.dart';
+import '../widgets/pro_celebration_dialog.dart';
 import 'ad_service.dart';
 import 'play_billing_service.dart';
 import 'supabase_service.dart';
 
 class MonetizationService {
   static const String _proKey = 'user_is_pro_status_v1';
+
+  /// Menandai pembelian baru (bukan restore) agar perayaan PRO hanya muncul sekali.
+  static bool _freshPurchasePending = false;
 
   static Future<bool> isProUser({String? userId}) async {
     // 1. Cek real-time ke Supabase jika online
@@ -265,7 +269,13 @@ class MonetizationService {
       ),
       builder: (_) => const ProUpgradeSheet(),
     );
-    return result ?? false;
+    final purchased = result ?? false;
+    final fresh = _freshPurchasePending;
+    _freshPurchasePending = false;
+    if (purchased && fresh && context.mounted) {
+      await showProCelebration(context);
+    }
+    return purchased;
   }
 
   /// Eksekusi pembelian PRO lewat Google Play (Android only).
@@ -448,6 +458,7 @@ class _ProUpgradeSheetState extends State<ProUpgradeSheet> {
       _noticeIsError = !outcome.success;
     });
     if (outcome.success) {
+      MonetizationService._freshPurchasePending = true;
       Navigator.of(context).pop(true);
     }
   }

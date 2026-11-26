@@ -1371,26 +1371,28 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 14),
-                  ElevatedButton.icon(
-                    onPressed: () async {
-                      Navigator.of(ctx).pop();
-                      await MonetizationService.openProPurchase(context);
-                    },
-                    icon: const Icon(Icons.workspace_premium_rounded,
-                        color: Colors.white, size: 19),
-                    label: const Text(
-                      'Beli PRO (Sekali Bayar)',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700, color: Colors.white),
+                  if (!isPro) ...[
+                    const SizedBox(height: 14),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        Navigator.of(ctx).pop();
+                        await MonetizationService.openProPurchase(context);
+                      },
+                      icon: const Icon(Icons.workspace_premium_rounded,
+                          color: Colors.white, size: 19),
+                      label: const Text(
+                        'Beli PRO (Sekali Bayar)',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.qrAmber,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
                     ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.qrAmber,
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
+                  ],
                   const SizedBox(height: 10),
                   OutlinedButton.icon(
                     onPressed: () async {
