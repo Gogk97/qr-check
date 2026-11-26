@@ -86,8 +86,11 @@ class _HomeScreenState extends State<HomeScreen> {
     // Bersihkan tempat sampah kedaluwarsa & sinkronkan kuota offline.
     TrashService.purgeExpired();
     QuotaService.syncPending();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) OnboardingScreen.showIfNeeded(context);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await OnboardingScreen.showIfNeeded(context);
+      if (!mounted) return;
+      await MonetizationService.maybeCelebratePro(context);
     });
   }
 

@@ -14,6 +14,21 @@ class MonetizationService {
   /// Menandai pembelian baru (bukan restore) agar perayaan PRO hanya muncul sekali.
   static bool _freshPurchasePending = false;
 
+  /// Penanda perayaan sudah pernah ditampilkan.
+  static const String _celebrationSeenKey = 'pro_celebration_seen_v1';
+
+  /// Tampilkan perayaan PRO sekali saja untuk pengguna yang sudah PRO
+  /// (mis. setelah pembelian berhasil atau setelah pembaruan aplikasi).
+  static Future<void> maybeCelebratePro(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_celebrationSeenKey) ?? false) return;
+    final pro = await isProUser();
+    if (!pro) return;
+    await prefs.setBool(_celebrationSeenKey, true);
+    if (!context.mounted) return;
+    await showProCelebration(context);
+  }
+
   static Future<bool> isProUser({String? userId}) async {
     // 1. Cek real-time ke Supabase jika online
     try {
@@ -273,7 +288,9 @@ class MonetizationService {
     final fresh = _freshPurchasePending;
     _freshPurchasePending = false;
     if (purchased && fresh && context.mounted) {
-      await showProCelebration(context);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_celebrationSeenKey, true);
+      if (context.mounted) await showProCelebration(context);
     }
     return purchased;
   }
