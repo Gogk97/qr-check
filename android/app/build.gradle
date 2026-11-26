@@ -75,4 +75,6 @@ dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
     // Google Play Billing (PBL 8.x — wajib >= 8 sejak 1 Nov 2026 untuk update aplikasi)
     implementation "com.android.billingclient:billing:8.3.0"
+    // Play In-App Updates (pembaruan tanpa keluar aplikasi)
+    implementation "com.google.android.play:app-update:2.1.0"
 }

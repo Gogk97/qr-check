@@ -15,6 +15,7 @@ import '../services/auth_service.dart';
 import '../services/duplicate_service.dart';
 import '../services/image_scanner_service.dart';
 import '../services/image_storage_service.dart';
+import '../services/in_app_update_service.dart';
 import '../services/monetization_service.dart';
 import '../services/notification_service.dart';
 import '../services/qris_audit_service.dart';
@@ -91,6 +92,10 @@ class _HomeScreenState extends State<HomeScreen> {
       await OnboardingScreen.showIfNeeded(context);
       if (!mounted) return;
       await MonetizationService.maybeCelebratePro(context);
+      if (!mounted) return;
+      // Pembaruan aplikasi lewat Play (flexible by default).
+      InAppUpdateService.attachContext(context);
+      await InAppUpdateService.checkAndPrompt(context);
     });
   }
 
@@ -1427,6 +1432,34 @@ class _HomeScreenState extends State<HomeScreen> {
                         color: AppTheme.inkColor(isDark), size: 18),
                     label: Text(
                       'Backup & Pulihkan',
+                      style: TextStyle(
+                          color: AppTheme.inkColor(isDark),
+                          fontWeight: FontWeight.w600),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.borderColor(isDark)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      Navigator.of(ctx).pop();
+                      final msg = await InAppUpdateService.checkManually();
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(msg),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    icon: Icon(Icons.system_update_alt_rounded,
+                        color: AppTheme.inkColor(isDark), size: 18),
+                    label: Text(
+                      'Periksa Pembaruan',
                       style: TextStyle(
                           color: AppTheme.inkColor(isDark),
                           fontWeight: FontWeight.w600),
